@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name          【超星学习通助手】更新AI解答+视频+测试+考试（使用AI进行答题）
 // @namespace     li_stu
-// @version       2.40
+// @version       2.41
 // @description   基于脚本猫 1693（unrival，GPL-3.0）二次开发并持续维护（维护者 li_stu）；第三方AI模型（OpenAI兼容接口，提示词固定前置提升缓存命中率，统计AI调用次数与缓存命中率，支持SSE流式响应解析，可跳过已作答题目，支持NuoAPI一键获取密钥）；学习通面板内置AI问答（直接调用LLM设置里保存的接口）；支持图片/听力题文本化、图书/链接/速课/直播任务、单实例运行与多窗口提示
 // @name:zh-TW   【超星學習通助手】更新AI解答+影片+測驗+考試（AI輔助）
 // @name:en      Chaoxing Learning Assistant [AI Answer][Video][Quiz][Exam]
@@ -1135,7 +1135,7 @@ button:hover{border-color:#93b9f5;background:#f7fbff}button.primary:hover{backgr
 <div class="row"><label>预设</label><div class="ctl"><select id="preset"></select></div></div>
 <div class="row"><label>接口地址</label><div class="ctl"><input id="url" placeholder="https://api.deepseek.com"></div></div>
 <div class="row"><label>API Key</label><div class="ctl"><input id="key" type="password" placeholder="sk-..."><span class="hint" id="showKey">显示</span></div></div>
-<div class="row"><label>获取密钥</label><div class="ctl"><a href="https://nuoapi.net/register" target="_blank" rel="noopener" style="color:#3b82f6;font-size:12px;line-height:1.6;">获取 NuoAPI 密钥</a></div></div>
+<div class="row"><label>获取密钥</label><div class="ctl"><a href="https://nuoapi.net/register" target="_blank" rel="noopener" style="color:#3b82f6;font-size:12px;line-height:1.6;">获取 NuoAPI 密钥</a><span class="hint" style="cursor:default;color:#8a97a6;">注册送 $1 额度（以官网活动为准），够刷 1000+ 题；也可用「自定义」接别家</span></div></div>
 <div class="row"><label>模型</label><div class="ctl"><select id="model"><option value="">请先获取模型列表</option></select><button id="fetchModels" type="button">获取模型列表</button></div></div>
 <div class="row"><label>跳过已作答</label><div class="ctl"><label style="font-size:12px;color:#526273;"><input type="checkbox" id="skip_answered" style="width:auto;margin-right:6px;vertical-align:middle;">已作答题目不覆盖</label></div></div>
 <div class="row"><label>超时 / 温度</label><div class="ctl"><input id="timeout" type="number" min="3000" step="1000" placeholder="超时 22000ms"><input id="temperature" type="number" min="0" max="2" step="0.1" placeholder="温度 0.2"><input id="max_tokens" type="number" min="1" step="64" placeholder="max_tokens 1024"></div></div>
@@ -1317,7 +1317,7 @@ function aiChapterQuestionScope(sourceWindow, hint) {
     try {
         var host = aiChapterSubmitHost(sourceWindow);
         var submit = host.__xxtChapterSubmit;
-        var blocked = !!(submit && submit.workId === workId && ['submitting', 'result', 'reviewed'].indexOf(submit.state) >= 0);
+        var blocked = aiChapterSubmitBlocking(submit, workId);
         var registry = host.__xxtChapterQuestionRequests;
         if (!(registry instanceof Map)) registry = host.__xxtChapterQuestionRequests = new Map();
         var requests = registry.get(workId);
@@ -1335,8 +1335,7 @@ function aiChapterQuestionScope(sourceWindow, hint) {
 function aiChapterQuestionBlocked(sourceWindow, workId) {
     if (!workId) return false;
     try {
-        var submit = aiChapterSubmitHost(sourceWindow).__xxtChapterSubmit;
-        return !!(submit && submit.workId === workId && ['submitting', 'result', 'reviewed'].indexOf(submit.state) >= 0);
+        return aiChapterSubmitBlocking(aiChapterSubmitHost(sourceWindow).__xxtChapterSubmit, workId);
     } catch (error) {
         console.warn('[AI question] 无法确认章节提交状态', error);
         return true;
@@ -1350,8 +1349,12 @@ function aiClaimChapterSubmit(sourceWindow, hint, source) {
     try {
         var previous = host.__xxtChapterSubmit;
         if (previous && previous.workId === workId) {
-            aiTrace('章节 ' + workId + '已有' + previous.source + '提交流程，阻止' + source + '重复提交', 'warn', sourceWindow);
-            return { claimed: false, reason: 'already-submitted', source: previous.source };
+            if (aiChapterSubmitBlocking(previous, workId)) {
+                aiTrace('章节 ' + workId + '已有' + previous.source + '提交流程，阻止' + source + '重复提交', 'warn', sourceWindow);
+                return { claimed: false, reason: 'already-submitted', source: previous.source };
+            }
+            aiTrace('章节 ' + workId + '上次提交锁' + (previous.state === 'failed' ? '已被平台拒绝' : '已超时未确认') +
+                '，按' + source + '重新尝试提交', 'warn', sourceWindow);
         }
         host.__xxtChapterSubmit = { workId: workId, source: source, state: 'submitting', time: Date.now() };
         aiTrace('章节 ' + workId + '由' + source + '占用提交权', 'info', sourceWindow);
@@ -1388,19 +1391,119 @@ function aiChapterAlreadyReviewed(sourceWindow, hint) {
 }
 
 function aiObserveChapterAlert(sourceWindow, hint, message) {
-    if (!/已批阅.*不允许重复提交/.test(String(message || ''))) return false;
-    var workId = aiChapterWorkId(sourceWindow, hint);
-    aiTrace('平台确认作业已批阅，停止后续提交步骤', 'warn', sourceWindow);
-    if (!workId) return true;
+    var text = String(message == null ? '' : message);
+    if (/已批阅.*不允许重复提交/.test(text)) {
+        var workId = aiChapterWorkId(sourceWindow, hint);
+        aiTrace('平台确认作业已批阅，停止后续提交步骤', 'warn', sourceWindow);
+        if (!workId) return true;
+        try {
+            var host = aiChapterSubmitHost(sourceWindow);
+            host.__xxtChapterSubmit = { workId: workId, source: 'platform', state: 'reviewed', time: Date.now() };
+            host.unrivalDoneWorkId = workId;
+            host.unrivalWorkDone = true;
+        } catch (error) {
+            aiTrace('已批阅提示无法回传课程页，请手动检查任务状态', 'warn', sourceWindow);
+        }
+        return true;
+    }
+    if (!AI_CHAPTER_SUBMIT_REJECT.test(text)) return false;
+    // 平台拒绝了这次提交（无效的参数 / code-1 / 不能为空…）。这里的锁必须立刻回退成
+    // 可重试，否则一次「无效的参数：code-1！| 就会把这个章节永久锁在 submitting，
+    // 后续所有提交都被「已有提交流程」挡掉，用户只能刷新页面重来。
+    var rejectId = aiChapterWorkId(sourceWindow, hint);
+    aiTrace('平台拒绝提交（' + text + '），已回退提交锁，可重新尝试', 'warn', sourceWindow);
+    if (!rejectId) return true;
     try {
-        var host = aiChapterSubmitHost(sourceWindow);
-        host.__xxtChapterSubmit = { workId: workId, source: 'platform', state: 'reviewed', time: Date.now() };
-        host.unrivalDoneWorkId = workId;
-        host.unrivalWorkDone = true;
+        var rejectHost = aiChapterSubmitHost(sourceWindow);
+        var current = rejectHost.__xxtChapterSubmit;
+        // 已经拿到「已批阅」结论的章节不能被一次迟到的失败弹窗降级。
+        if (current && current.workId === rejectId && current.state === 'reviewed') return true;
+        rejectHost.__xxtChapterSubmit = { workId: rejectId, source: 'platform', state: 'failed', time: Date.now(),
+            message: text.slice(0, 80) };
     } catch (error) {
-        aiTrace('已批阅提示无法回传课程页，请手动检查任务状态', 'warn', sourceWindow);
+        aiTrace('提交失败提示无法回传课程页，请手动检查提交结果', 'warn', sourceWindow);
     }
     return true;
+}
+
+// 提交锁的存活上限：平台卡住、被拦截或页面被关掉时没人释放锁，
+// 超过这个时间就必须允许重试，否则整个章节永久停在「已提交」状态。
+var AI_CHAPTER_SUBMIT_TTL_MS = 60000;
+// 提交前等待其他页面在途题目请求的上限，超过就放弃这次自动提交。
+var AI_CHAPTER_PENDING_WAIT_MS = 60000;
+// 在途请求的存活上限：页面被关掉后令牌没人收尾，超时后不再算 pending。
+var AI_CHAPTER_PENDING_STALE_MS = 120000;
+// 平台拒绝提交时的弹窗文案。命中后把提交锁回退成可重试。
+// `code-1` 必须带分隔符才算：模型/接口侧的普通 `code1` 不能被误判成提交被拒。
+var AI_CHAPTER_SUBMIT_REJECT = /无效的参数|不能为空|参数错误|提交失败|code\s*[-:：]\s*-?1\b/;
+
+function aiChapterSubmitExpired(record) {
+    var time = Number(record && record.time);
+    if (!isFinite(time) || time <= 0) return false;
+    return Date.now() - time > AI_CHAPTER_SUBMIT_TTL_MS;
+}
+
+// 该提交锁是否仍然阻止新的提交/作答：
+// reviewed/result 表示平台已收卷或已进结果页，永久阻止；
+// submitting 只是「有人正在提」，超过 TTL 还没确认就必须允许重试，
+// 否则一次卡住或被平台静默丢弃的提交会把这个章节锁死到刷新页面为止。
+function aiChapterSubmitBlocking(record, workId) {
+    if (!record || record.workId !== workId) return false;
+    if (record.state === 'reviewed' || record.state === 'result') return true;
+    if (record.state !== 'submitting') return false;
+    return !aiChapterSubmitExpired(record);
+}
+
+function aiChapterSubmitFailed(sourceWindow, hint) {
+    if (!aiChapterWorkId(sourceWindow, hint)) return false;
+    try {
+        var record = aiChapterSubmitHost(sourceWindow).__xxtChapterSubmit;
+        return !!(record && record.workId === aiChapterWorkId(sourceWindow, hint) && record.state === 'failed');
+    } catch (error) {
+        return false;
+    }
+}
+
+// 共享注册表里属于该章节、仍在处理中的题目请求数。桌面章节页只核验本页 results，
+// 看不到手机章节页还在跑的 AI 请求，提交前必须靠这个计数确认没人还在写答案。
+function aiChapterPendingRequests(sourceWindow, workId) {
+    if (!workId) return 0;
+    try {
+        var registry = aiChapterSubmitHost(sourceWindow).__xxtChapterQuestionRequests;
+        if (!(registry instanceof Map)) return 0;
+        var requests = registry.get(workId);
+        if (!(requests instanceof Map)) return 0;
+        var now = Date.now();
+        var pending = 0;
+        requests.forEach(function (token) {
+            if (!token || token.state !== 'pending') return;
+            if (now - Number(token.startedAt || 0) > AI_CHAPTER_PENDING_STALE_MS) return;
+            pending++;
+        });
+        return pending;
+    } catch (error) {
+        return 0;
+    }
+}
+
+// 轮询等待在途请求收尾，返回「是否超时」与剩余 pending 数。
+function aiWaitChapterPendingRequests(sourceWindow, workId, budget, onWait) {
+    var limit = Number(budget) > 0 ? Number(budget) : AI_CHAPTER_PENDING_WAIT_MS;
+    var startedAt = Date.now();
+    var deadline = startedAt + limit;
+    return new Promise(function (resolve) {
+        var check = function () {
+            var pending = aiChapterPendingRequests(sourceWindow, workId);
+            var waited = Date.now() - startedAt;
+            if (!pending) { resolve({ timedOut: false, pending: 0, waited: waited }); return; }
+            if (Date.now() >= deadline) { resolve({ timedOut: true, pending: pending, waited: waited }); return; }
+            if (typeof onWait === 'function') {
+                try { onWait(pending, deadline - Date.now(), waited); } catch (error) {}
+            }
+            setTimeout(check, 500);
+        };
+        check();
+    });
 }
 
 var GLOBAL = {
@@ -1945,9 +2048,11 @@ function aiBeginQuestion(root, key, source, signature, chapterWorkId, position) 
     var token = { id: ++aiQuestionSequence, key: key || "dom", source: source, root: root, fingerprint: fingerprint, state: "pending",
         position: position || 0, startedAt: Date.now(), attempts: 0, chapterWorkId: chapterScope && chapterScope.workId, chapterRequestId: sharedId };
     token.isLive = function () {
-        return requests.get(id) === token && (!chapterScope || (chapterScope.requests.get(sharedId) === token &&
-            !aiChapterQuestionBlocked(sourceWindow, chapterScope.workId))) && root.isConnected !== false &&
-            doc.documentElement.contains(root) && signature() === fingerprint;
+        // 不再因为章节进入 submitting 就判死：进入提交只应阻止「启动新题目」，
+        // 已经在途的 AI 请求仍在合法地写答案，一旦提前作废，答对的题会被当成
+        // 「题目已切换，已丢弃过期答案」丢掉，提交反而变成缺题提交。
+        return requests.get(id) === token && (!chapterScope || chapterScope.requests.get(sharedId) === token) &&
+            root.isConnected !== false && doc.documentElement.contains(root) && signature() === fingerprint;
     };
     token.isCurrent = function () { return token.state === "pending" && token.isLive(); };
     token.finish = function (success, reason) {
@@ -5301,27 +5406,173 @@ var __XXT_DUP__ = (function () {
             if (!aiAllQuestionsVerified(total, results)) return false;
             // 「已有页面答案，按设置跳过」的题没有请求令牌（跳过发生在建请求之前），
             // 这类题只看页面上是否真有答案，不能因为它没有 request 就判成未作答。
+            let skipped = 0;
             for (let index = 0; index < total; index++) {
                 const result = results[index];
-                if (!result || result.skipped) continue;
+                if (!result || result.skipped) { if (result && result.skipped) skipped++; continue; }
                 if (!result.request || typeof result.request.isLive !== 'function' || !result.request.isLive()) return false;
             }
+            // 该章节上一次提交被平台拒绝过，页面上的「已有答案」很可能就是被拒的那一份：
+            // 沿用它们凑出的 100% 不是作答结果，重新提交只会再失败一次。
+            if (skipped > 0 && aiChapterSubmitFailed(_self, '')) return false;
             return true;
         } catch (error) {
             console.warn('[chapter verify]', error);
             return false;
         }
     }
+    // 桌面章节页的提交必须是平台的完整链路：
+    // btnBlueSubmit → validateTimeNew（异步 /work/validate）→ toadd（把凭证写进 #enc / #answerwqbid）
+    // → workPop「确认提交」→ submitCheckTimes → form1submit → confirmSubmitWork(POST)。
+    // 直接调 submitCheckTimes 会跳过 toadd，表单里的 enc 还是空的，
+    // version(url) 拼出的 pos 因此为空，服务端一律回「无效的参数：code-1！」并刷新整页。
+    function desktopChapterSubmitWindows() {
+        const windows = [];
+        let current = _self;
+        while (current) {
+            try {
+                if (!current.document) break;
+                windows.push(current);
+                const parent = current.parent;
+                if (!parent || parent === current) break;
+                void parent.document;
+                current = parent;
+            } catch (error) {
+                break;
+            }
+        }
+        return windows.length ? windows : [_self];
+    }
+    // 平台把待提交的题号清单写进 #answerwqbid，并由 toadd 顺带补齐全各类题型的答案，
+    // 这一步跑过才说明 validate 通过、表单已备齐；只调 submitCheckTimes 会把这个清单留空，
+    // 服务端拿不到题号，直接回「无效的参数：code-1！」。
+    function desktopChapterFormReady() {
+        for (const target of desktopChapterSubmitWindows()) {
+            try {
+                const ids = target.document.getElementById('answerwqbid');
+                if (ids && String(ids.value == null ? '' : ids.value).trim()) return true;
+            } catch (error) {}
+        }
+        return false;
+    }
+    // 平台在提交流程里弹出的拦截文案（账号异常等），由 desktopChapterTraceAlerts 回填。
+    let desktopChapterAlertNote = '';
+    // 平台拦住这次提交时的真实原因。validate 只在 status==3 时回调 toadd，
+    // status==1 alert「账号发生异常」、status==2 弹验证码，这两种情况下确认框永远不会出现。
+    // 只报「凭证未就绪」会把验证码说成交付失败，用户刷新页面再来一次照样交不上。
+    function desktopChapterSubmitBlocker() {
+        if (desktopChapterAlertNote) return desktopChapterAlertNote;
+        for (const target of desktopChapterSubmitWindows()) {
+            try {
+                const verify = target.document.getElementById('verifyCodeWin');
+                if (verify && verify.style && verify.style.display === 'block') {
+                    return '平台要求输入提交验证码，请手动完成验证后再提交';
+                }
+            } catch (error) {}
+        }
+        return '';
+    }
+    // 上一次桌面提交被拦住的说明，供收尾流程如实上报。
+    let desktopChapterSubmitNote = '';
+    // 接管平台的「确认提交」弹窗，等价于用户自己点确定。
+    // 返回 false 表示平台始终没进入提交流程（凭证没写进来），此时不能硬提交。
+    async function desktopChapterConfirmSubmit() {
+        desktopChapterSubmitNote = '';
+        let confirmed = false;
+        // 平台只会在 toadd 跑完之后才弹确认框，所以弹过框就等于说过一次「表单已备齐」，
+        // 再等下去没有意义，直接结束，避免让用户白等 15 秒。
+        let dialogSeen = false;
+        const hooks = [];
+        const release = () => {
+            for (const hook of hooks) {
+                try { if (hook.target.workPop === hook.hooked) hook.target.workPop = hook.original; } catch (error) {}
+            }
+            hooks.length = 0;
+        };
+        for (const target of desktopChapterSubmitWindows()) {
+            try {
+                const original = target.workPop;
+                if (typeof original !== 'function') continue;
+                const hooked = function (content, okText, cancelText, okcallback) {
+                    // 只自动确认提交框；未及格重做等其它弹窗保持平台原样。
+                    const message = String(content == null ? '' : content);
+                    if (confirmed || !/确认提交/.test(message) || typeof okcallback !== 'function') {
+                        return original.apply(this, arguments);
+                    }
+                    // toadd 会先写好待提交题号清单再弹框，清单为空说明这次提交是空表单，宁可不点。
+                    if (!desktopChapterFormReady()) {
+                        dialogSeen = true;
+                        aiTrace('桌面提交：确认框已弹出但待提交清单为空，交由用户手动确认', 'warn', _self);
+                        return original.apply(this, arguments);
+                    }
+                    confirmed = true;
+                    try {
+                        okcallback();
+                    } catch (error) {
+                        console.warn('[chapter submit]', error);
+                    }
+                    return undefined;
+                };
+                target.workPop = hooked;
+                hooks.push({ target: target, original: original, hooked: hooked });
+            } catch (error) {
+                console.warn('[chapter submit hook]', error);
+            }
+        }
+        try {
+            await Promise.resolve(_self.btnBlueSubmit());
+            const deadline = Date.now() + 15000;
+            while (!confirmed && !dialogSeen && Date.now() < deadline) {
+                await sleep(250);
+                if (aiChapterAlreadyReviewed(_self, '')) break;
+                // 平台已经明确拒绝（无效的参数 / code-1）：确认框永远不会来了，别让用户白等 15 秒。
+                if (aiChapterSubmitFailed(_self, '')) break;
+                // 弹了验证码就说明这次提交被平台拦在 /work/validate 之前，确认框不会出现。
+                const blocker = desktopChapterSubmitBlocker();
+                if (blocker) {
+                    desktopChapterSubmitNote = blocker;
+                    aiTrace('桌面提交：' + blocker, 'warn', _self);
+                    break;
+                }
+            }
+            // 弹窗没劫持到时，只有清单已经写好才允许走平台的 submitCheckTimes（否则就是 code-1 的来源）；
+            // 平台已经回「已批阅」时更不能补一刀，那只会换来一次重复提交提示。
+            if (!confirmed && !desktopChapterSubmitNote && !aiChapterAlreadyReviewed(_self, '') && desktopChapterFormReady()) {
+                aiTrace('桌面提交：未捕获确认框但待提交清单已就绪，直接调用 submitCheckTimes', 'info', _self);
+                if (typeof _self.submitCheckTimes === 'function') {
+                    await Promise.resolve(_self.submitCheckTimes());
+                    confirmed = true;
+                }
+            }
+        } finally {
+            release();
+        }
+        return confirmed;
+    }
     function desktopChapterTraceAlerts() {
-        const windows = [_self];
+        desktopChapterAlertNote = '';
+        const windows = desktopChapterSubmitWindows();
         try { if (_self.top !== _self && _self.top.document) windows.push(_self.top); } catch (error) {}
         for (const target of windows) {
             try {
                 const original = target.alert;
                 if (typeof original !== 'function') continue;
                 const observed = function (message) {
-                    aiTrace('平台提交弹窗：' + String(message), 'warn', _self);
-                    aiObserveChapterAlert(_self, '', message);
+                    const text = String(message == null ? '' : message);
+                    aiTrace('平台提交弹窗：' + text, 'warn', _self);
+                    // validate 的 status==1 只会 alert「账号发生异常」再返回，不会回调 toadd，
+                    // 确认框因此永远不会出现；把它记下来，收尾时如实告诉用户卡在哪一步。
+                    if (/账号发生异常|请刷新页面后重试/.test(text)) desktopChapterAlertNote = text;
+                    // 先让协调层处理（回退提交锁 / 记已批阅），再独立判断要不要上报：
+                    // 两者返回值无关，回退提交锁成功不代表用户已经知道这次没交上去。
+                    const handled = aiObserveChapterAlert(_self, '', message);
+                    // 平台自己拒绝了这次提交时必须如实报错，否则面板还显示「已发起提交」，
+                    // 用户只看到一个莫名弹窗 + 整页刷新，完全不知道课没交上去。
+                    if (!handled && /无效的参数|提交失败|参数错误|请重新提交/.test(text)) {
+                        const tip = '平台拒绝提交：' + text + '（请刷新页面后重新提交）';
+                        iframeMsg('tip', { type: 'hidden', tip: tip });
+                        try { _self.top.unrivalWorkInfo = tip; } catch (error) {}
+                    }
                     return original.apply(this, arguments);
                 };
                 target.alert = observed;
@@ -5383,7 +5634,16 @@ var __XXT_DUP__ = (function () {
         const autoSave = String(setting('unrivalAutoSave', GM_getValue('unrivalautosave', '1'))) === '1';
         // 两项同时开启时一律提交优先：保存会弹平台提示并可能刷新页面，导致整章重新作答。
         const allowSave = autoSave && !autoSubmit;
+        // 上一次提交被平台拒绝时，「沿用页面已有答案」不算作答结果：
+        // 页面上那一份很可能就是被拒的旧答案，直接沿用等于拿同一份答案再被拒一次。
+        const reusedInvalid = reusedCount() > 0 && aiChapterSubmitFailed(_self, '');
         if (!desktopChapterVerified(results, total)) {
+            if (reusedInvalid) {
+                const failed = failSummary(notes);
+                report('上次提交被平台拒绝，页面上的旧答案不再计入覆盖率，请取消勾选「跳过已作答」后重新作答' +
+                    (failed.length ? '（未通过 ' + failed.length + ' 题）' : ''));
+                return 'handled';
+            }
             const failed = failSummary(notes);
             // 章节失败清单可能很长，先按 180 字裁剪，保证不会被 aiTrace 的 240 字上限直接截掉结论。
             const failedText = failed.length ? aiClip('未通过 ' + failed.length + ' 题：' + failed.join('；'), 180) : '';
@@ -5404,7 +5664,7 @@ var __XXT_DUP__ = (function () {
         }
         try {
             if (autoSubmit) {
-                if (typeof _self.btnBlueSubmit !== 'function' || typeof _self.submitCheckTimes !== 'function') {
+                if (typeof _self.btnBlueSubmit !== 'function') {
                     if (allowSave && typeof _self.noSubmit === 'function') {
                         await Promise.resolve(_self.noSubmit());
                         report('平台提交函数未就绪，已发起保存，请手动检查并提交');
@@ -5415,6 +5675,22 @@ var __XXT_DUP__ = (function () {
                 }
                 report('作答覆盖率 100%' + reusedText() + '，页面选项已核验，准备提交');
                 await sleep(2000);
+                // 手机章节页可能还在跑 AI 请求：共享注册表里只要还有 pending，就说明这一章
+                // 还没答完，抢在它前面提交等于把「答了一半」的卷子交上去，平台会回
+                // 「无效的参数：code-1！」并刷新整页，整章白跑。
+                const pendingWorkId = aiChapterWorkId(_self, '');
+                if (pendingWorkId) {
+                    const wait = await aiWaitChapterPendingRequests(_self, pendingWorkId, AI_CHAPTER_PENDING_WAIT_MS,
+                        (pending, left) => report('等待其他页面在途题目请求收尾（剩余 ' + pending + ' 题，最长再等 ' +
+                            Math.ceil(left / 1000) + ' 秒）'));
+                    if (wait.timedOut) {
+                        report('仍有 ' + wait.pending + ' 道题在途未结束，已取消本次自动提交，请稍后重试');
+                        return 'handled';
+                    }
+                    if (wait.waited > 0) {
+                        aiTrace('在途题目请求已收尾（等待 ' + (wait.waited / 1000).toFixed(1) + 's），继续提交', 'info', _self);
+                    }
+                }
                 if (!desktopChapterVerified(results, total)) {
                     report('提交前页面状态发生变化，已取消自动提交');
                     return 'handled';
@@ -5426,19 +5702,14 @@ var __XXT_DUP__ = (function () {
                 }
                 desktopChapterTraceAlerts();
                 aiTrace('桌面提交：调用 btnBlueSubmit', 'info', _self);
-                await Promise.resolve(_self.btnBlueSubmit());
+                // 由劫持到的「确认提交」回调触发 submitCheckTimes，保证 toadd 已把凭证写进表单。
+                const submitted = await desktopChapterConfirmSubmit();
                 if (aiChapterAlreadyReviewed(_self, '')) {
                     report('平台提示作业已批阅，停止重复提交');
                     return 'handled';
                 }
-                aiTrace('桌面提交：btnBlueSubmit 已返回，调用 submitCheckTimes', 'info', _self);
-                if (typeof _self.submitCheckTimes === 'function') {
-                    await Promise.resolve(_self.submitCheckTimes());
-                } else {
-                    aiTrace('桌面提交：平台未提供 submitCheckTimes，跳过该步骤', 'warn', _self);
-                }
-                if (aiChapterAlreadyReviewed(_self, '')) {
-                    report('平台提示作业已批阅，停止重复提交');
+                if (!submitted) {
+                    report(desktopChapterSubmitNote || '平台未进入提交流程（凭证未就绪），请手动点击提交');
                     return 'handled';
                 }
                 aiTrace('桌面提交：submitCheckTimes 已返回，等待平台结果页', 'info', _self);
@@ -8674,7 +8945,11 @@ function xxtObserveNativeVideoProgress(sourceWindow) {
             }
             aiTrace('平台弹窗：' + String(msg), 'warn', _w);
             if (aiObserveChapterAlert(_w, _phoneWorkId, msg)) {
-                _w.top.unrivalWorkInfo = '平台提示作业已批阅，停止重复提交';
+                let held = {};
+                try { held = aiChapterSubmitHost(_w).__xxtChapterSubmit || {}; } catch (error) { held = {}; }
+                _w.top.unrivalWorkInfo = held.state === 'failed' ?
+                    '平台拒绝提交：' + _phoneAlertText.slice(0, 40) + '（已释放提交锁，请检查后重试）' :
+                    '平台提示作业已批阅，停止重复提交';
                 aiPanelMessage('tip', { type: 'hidden', tip: _w.top.unrivalWorkInfo }, _w);
             }
             _w.aalert(msg);
@@ -8951,11 +9226,25 @@ function xxtObserveNativeVideoProgress(sourceWindow) {
             if (autoSubmit && allVerified && aiCanSubmitQuestions(_phoneTotal, _phoneResults, accuracy)) {
                 _w.top.unrivalWorkInfo = '作答覆盖率 ' + coverage + '%，选项已核验，准备提交';
                 _phonePanelTip('作答覆盖率 ' + coverage + '%，选项已核验，准备提交', 'hidden');
-                setTimeout(function () {
+                setTimeout(async function () {
                     if (!aiAllQuestionsVerified(_phoneTotal, _phoneResults) || !aiCanSubmitQuestions(_phoneTotal, _phoneResults, accuracy)) {
                         _w.top.unrivalWorkInfo = '提交前页面状态发生变化，已取消自动提交';
                         _phonePanelTip('提交前页面状态发生变化，已取消自动提交，请手动检查', 'hidden');
                         return;
+                    }
+                    // 桌面章节页可能还有在途的 AI 请求，等它们收尾再提交，避免交出半份卷子。
+                    if (_phoneWorkId) {
+                        const pending = await aiWaitChapterPendingRequests(_w, _phoneWorkId, AI_CHAPTER_PENDING_WAIT_MS,
+                            (count, left) => _phonePanelTip('等待其他页面在途题目请求收尾（剩余 ' + count + ' 题，最长再等 ' +
+                                Math.ceil(left / 1000) + ' 秒）', 'active'));
+                        if (pending.timedOut) {
+                            _w.top.unrivalWorkInfo = '仍有 ' + pending.pending + ' 道题在途未结束，已取消本次自动提交，请稍后重试';
+                            _phonePanelTip(_w.top.unrivalWorkInfo, 'hidden');
+                            return;
+                        }
+                        if (pending.waited > 0) {
+                            aiTrace('手机提交：在途题目请求已收尾（等待 ' + (pending.waited / 1000).toFixed(1) + 's），继续提交', 'info', _w);
+                        }
                     }
                     try {
                         const claim = aiClaimChapterSubmit(_w, _phoneWorkId, '手机章节页');

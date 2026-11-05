@@ -199,6 +199,9 @@ async function mountPhone(browser, html, config = {}) {
         window.stats = { requests: [], submits: 0, saves: 0, clicks: 0, checks: 0, escapes: 0, alerts: [] };
         window.alert = message => stats.alerts.push(message);
         if (config.existingClaim) window.__xxtChapterSubmit = { workId: 'work1', source: '桌面章节页', state: 'submitting' };
+        // 模拟桌面章节页还有一道题在等模型回复：提交前必须等它，等不到就放弃这次提交。
+        if (config.existingRequests) window.__xxtChapterQuestionRequests =
+            new Map([['work1', new Map([['id:other-page-question', { state: 'pending', startedAt: Date.now() }]])]]);
         window.iframeMessages = [];
         if (!config.noPanel) {
             const panel = document.createElement('iframe');
@@ -361,6 +364,16 @@ async function runPhoneCases(browser) {
         assert.match(state.panelMessages.filter(message => message.eventType === 'tip').at(-1).tip, /提交流程发生异常/);
         console.log('PASS phone: submit startup error is surfaced in the panel');
     } finally { await submitErrorPage.close(); }
+
+    // 桌面章节页可能还在跑 AI 请求：共享注册表里只要还有 pending，就不能提交一份半成品。
+    const blockedPage = await mountPhone(browser, question(), { existingRequests: true });
+    try {
+        await blockedPage.clock.runFor(70000);
+        const state = await phoneState(blockedPage);
+        assert.equal(state.submits, 0, 'a chapter with in-flight requests must not be submitted');
+        assert.match(state.info, /仍有 1 道题在途未结束/);
+        console.log('PASS phone: in-flight chapter requests block the submit instead of racing it');
+    } finally { await blockedPage.close(); }
 }
 
 async function runMissionRendering(browser) {
@@ -505,9 +518,19 @@ async function runDesktopChapter(browser) {
             const submissions = calls.slice();
             const alertTrace = window.__xxtDebugEvents.some(entry => entry.message.includes('平台提交弹窗：无效的参数：code -1!'));
             calls.length = 0;
-            const duplicate = await finishDesktopChapterWork(true, success, 1);
-            const afterDuplicate = calls.slice();
+            // 平台拒绝提交后锁必须回退成可重试：否则这一章会被一次 code-1 永久锁死，
+            // 用户只能刷新页面重来。
+            const retried = await finishDesktopChapterWork(true, success, 1);
+            const afterRetry = calls.slice();
+            const retryState = window.__xxtChapterSubmit.state;
             calls.length = 0;
+            // 反之，仍在有效期内、未被拒绝的 submitting 锁必须继续挡住重复提交。
+            window.__xxtChapterSubmit = { workId: 'work1', source: '手机章节页', state: 'submitting', time: Date.now() };
+            const locked = await finishDesktopChapterWork(true, success, 1);
+            const afterLocked = calls.slice();
+            const lockedInfo = window.unrivalWorkInfo;
+            calls.length = 0;
+            delete window.__xxtChapterSubmit;
             const staleResult = [{ success: true, request: { isLive: () => true }, verify: () => true }];
             window.sleep = () => { staleResult[0].verify = () => false; return Promise.resolve(); };
             const stale = await finishDesktopChapterWork(true, staleResult, 1);
@@ -528,14 +551,20 @@ async function runDesktopChapter(browser) {
             window.unrivalAutoSave = '1';
             const saveOnly = await finishDesktopChapterWork(true, [], 1);
             const afterSaveOnly = calls.slice();
-            return { rejected, accepted, duplicate, stale, fallback, reviewed, saveOnly, afterRejected, submissions, alertTrace,
-                afterDuplicate, afterStale, afterFallback, afterReviewed, afterSaveOnly, workDone: window.unrivalWorkDone,
-                submitState: window.__xxtChapterSubmit.state };
+            return { rejected, accepted, retried, locked, stale, fallback, reviewed, saveOnly, afterRejected, submissions, alertTrace,
+                afterRetry, retryState, afterLocked, lockedInfo, afterStale, afterFallback, afterReviewed, afterSaveOnly,
+                workDone: window.unrivalWorkDone, submitState: window.__xxtChapterSubmit.state };
         });
-        assert.deepEqual(finish, { rejected: 'handled', accepted: 'handled', duplicate: 'handled', stale: 'handled', fallback: 'handled', reviewed: 'handled',
-            saveOnly: 'handled',
-            afterRejected: [], submissions: ['alert:无效的参数：code -1!', 'submit', 'check'], alertTrace: true,
-            afterDuplicate: [], afterStale: [], afterFallback: [],
+        assert.deepEqual(finish, { rejected: 'handled', accepted: 'handled', retried: 'handled', locked: 'handled', stale: 'handled',
+            fallback: 'handled', reviewed: 'handled', saveOnly: 'handled',
+            // 平台回「无效的参数：code-1！」之后不能再补一次 submitCheckTimes：清单是空的，
+            // 补的那一刀只会换来第二个同样失败的 POST。
+            afterRejected: [], submissions: ['alert:无效的参数：code -1!', 'submit'], alertTrace: true,
+            // 被拒的锁回退成 failed，同一章节可以重试（而不是被永久锁到刷新页面）。
+            afterRetry: ['alert:无效的参数：code -1!', 'submit'], retryState: 'failed',
+            // 仍在有效期内的 submitting 锁继续挡住重复提交。
+            afterLocked: [], lockedInfo: '同一章节已由其他页面发起提交，已阻止重复提交',
+            afterStale: [], afterFallback: [],
             afterReviewed: ['alert:已批阅作业，不允许重复提交!', 'submit'], afterSaveOnly: ['save'],
             workDone: true, submitState: 'reviewed' });
         console.log('PASS desktop chapter: only verified answers reach platform submit');
@@ -581,8 +610,20 @@ async function runDesktopChapterSkipAccounting(browser) {
             reports.length = 0;
             const finishAfterClear = await finishDesktopChapterWork(true, [skipped], 1);
             const clearedText = reports.slice();
+            // 上一次提交被平台拒绝时，页面上那批「已有答案」很可能就是被拒的那一份，
+            // 沿用它们凑出的 100% 不能当结论，必须让用户重新作答。
+            item.find('li').attr('aria-checked', 'true');
+            window.__xxtChapterSubmit = { workId: 'skipwork1', source: '桌面章节页', state: 'failed',
+                time: Date.now(), message: '无效的参数：code-1！' };
+            reports.length = 0;
+            const allAfterReject = desktopChapterVerified([skipped], 1);
+            const finishAfterReject = await finishDesktopChapterWork(true, [skipped], 1);
+            const rejectedText = reports.slice();
+            delete window.__xxtChapterSubmit;
+            const allAfterRetry = desktopChapterVerified([skipped], 1);
             window.aiTrace = originalTrace;
-            return { allOne, finishSkipped, allAfterClear, finishAfterClear, skipText, clearedText };
+            return { allOne, finishSkipped, allAfterClear, finishAfterClear, skipText, clearedText,
+                allAfterReject, finishAfterReject, rejectedText, allAfterRetry };
         });
         assert.equal(result.allOne, true, 'a skipped-but-already-answered question must count as verified');
         assert.equal(result.finishSkipped, 'handled');
@@ -594,6 +635,13 @@ async function runDesktopChapterSkipAccounting(browser) {
             'the summary must say how many questions reused the existing page answer');
         assert.ok(result.clearedText.some(line => line.includes('页面已有答案已失效，需重新作答')),
             'a cleared page answer must be reported with its own wording');
+        assert.equal(result.allAfterReject, false,
+            'reused page answers must not verify the chapter while the last submit is still rejected');
+        assert.equal(result.finishAfterReject, 'handled');
+        assert.ok(result.rejectedText.some(line => line.includes('上次提交被平台拒绝')),
+            'a rejected chapter must tell the user to answer again instead of re-submitting the same answers');
+        assert.equal(result.allAfterRetry, true,
+            'once the lock is released the reused page answers count again');
         console.log('PASS desktop chapter: skipped-but-answered questions are recorded and never reported as unanswered');
     } finally { await page.close(); }
 }

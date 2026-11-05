@@ -970,36 +970,207 @@ test('mobile chapter submit resolves platform hooks by name and never calls a ba
     assert.match(source, /throw new Error\('平台未提供 submitAction/, 'a missing submitAction must abort loudly');
 });
 
-test('desktop chapter submit tolerates a page without submitCheckTimes', () => {
-    const from = script.indexOf("桌面提交：btnBlueSubmit 已返回");
-    assert.notEqual(from, -1, 'the desktop submit sequence must exist');
-    const to = script.indexOf("桌面提交：submitCheckTimes 已返回", from);
-    assert.ok(to > from, 'the desktop submit sequence must be bounded');
+test('desktop chapter submit drives the platform confirm flow instead of a bare submitCheckTimes', () => {
+    const from = script.indexOf('async function desktopChapterConfirmSubmit()');
+    assert.notEqual(from, -1, 'the desktop confirm helper must exist');
+    const end = script.indexOf('\n    }\n', from);
+    assert.ok(end > from, 'the desktop confirm helper must be bounded');
+    const helper = script.slice(from, end);
+
+    // submitCheckTimes 会跳过平台的 toadd，#answerwqbid / enc 还是空的，服务端回「无效的参数：code-1！」。
+    assert.match(helper, /desktopChapterFormReady\(\)/, 'the bounded-form state must be verified before submitting');
+    assert.match(helper, /if \(!confirmed && !desktopChapterSubmitNote && !aiChapterAlreadyReviewed\(_self, ''\) && desktopChapterFormReady\(\)\)/,
+        'the submitCheckTimes fallback may only run once the pending-question list is populated');
+    // validate 走 status==1（账号异常）/status==2（验证码）时确认框永远不会来，
+    // 必须报出真实原因，不能把验证码说成「凭证未就绪」。
+    assert.match(helper, /desktopChapterSubmitBlocker\(\)/, 'a verification-code submit must be reported as such');
+    assert.match(helper, /if \(blocker\) \{/, 'a blocking verify dialog must break the wait');
+    assert.match(helper, /aiChapterSubmitFailed\(_self, ''\)\) break/,
+        'a platform rejection must stop the wait instead of burning the full timeout');
+    assert.match(helper, /workPop/, 'the platform confirm dialog must be intercepted');
+    assert.match(helper, /\/确认提交\//, 'only the submit confirmation may be auto-confirmed');
+    assert.match(helper, /hook\.target\.workPop = hook\.original/, 'the workPop hook must be restored');
+
+    const callFrom = script.indexOf("aiTrace('桌面提交：调用 btnBlueSubmit'");
+    assert.notEqual(callFrom, -1, 'the desktop submit sequence must exist');
+    const callTo = script.indexOf("aiTrace('桌面提交：submitCheckTimes 已返回", callFrom);
+    assert.ok(callTo > callFrom, 'the desktop submit sequence must be bounded');
+    const sequence = script.slice(callFrom, callTo);
+    assert.match(sequence, /await desktopChapterConfirmSubmit\(\)/, 'the sequence must go through the confirm helper');
+    assert.ok(!/_self\.submitCheckTimes\(\)/.test(sequence),
+        'the sequence must not call submitCheckTimes outside the guarded helper');
+    assert.match(sequence, /if \(!submitted\)/, 'an unconfirmed submit must be reported, not claimed as success');
+
+    return Promise.resolve();
+});
+
+test('platform submit rejections are surfaced instead of claimed as success', () => {
+    const from = script.indexOf('const observed = function (message) {');
+    assert.notEqual(from, -1, 'the alert observer must exist');
+    const to = script.indexOf('target.alert = observed;', from);
+    assert.ok(to > from, 'the alert observer must be bounded');
     const source = script.slice(from, to);
+    assert.match(source, /无效的参数/, 'the code-1 rejection must be recognised');
+    assert.match(source, /平台拒绝提交/, 'the rejection must be reported to the panel');
+    assert.match(source, /unrivalWorkInfo/, 'the rejection must overwrite the panel status');
+    // 协调层先有机会回退提交锁，但上报与回退是两件事：回退成功不代表用户知道课没交上。
+    assert.match(source, /const handled = aiObserveChapterAlert\(_self, '', message\);[\s\S]*if \(!handled &&/,
+        'the panel tip must not depend on the lock rollback result');
+    // validate 的 status==1 只 alert 就返回，确认框永远不会来，必须记下这句真实原因。
+    assert.match(source, /账号发生异常/, 'a platform-level block must be remembered for the final report');
+});
 
-    // 入口处只校验了 btnBlueSubmit/submitCheckTimes 之一，中途再调用时必须自带守卫。
-    assert.match(source, /if \(typeof _self\.submitCheckTimes === 'function'\)/,
-        'the second submitCheckTimes call must be guarded');
+// 提交锁的三种状态语义：reviewed/result 永久挡、submitting 只在 TTL 内挡、failed 立刻可重试。
+// 早期实现只要 state 不是 reviewed 就一律挡，于是一次「无效的参数：code-1！」能把整章
+// 永久锁在 submitting，用户只能刷新页面重来。
+test('an expired or platform-rejected chapter submit lock never blocks a retry', () => {
+    const from = script.indexOf('function aiChapterSubmitHost(');
+    const to = script.indexOf('var GLOBAL = {', from);
+    assert.ok(from !== -1 && to > from, 'the chapter submit coordination layer must be bounded');
+    const context = vm.createContext({ console, Date, Map, URLSearchParams, Promise, setTimeout,
+        aiTrace: () => {}, aiClip: (text, max) => String(text).slice(0, max) });
+    vm.runInContext(script.slice(from, to) + `
+globalThis.api = { claim: aiClaimChapterSubmit, observe: aiObserveChapterAlert, failed: aiChapterSubmitFailed,
+    pending: aiChapterPendingRequests, wait: aiWaitChapterPendingRequests };`, context);
+    const api = context.api;
+    const win = { location: { search: '' }, document: { getElementById: () => null }, unrivalActiveWorkId: 'w1' };
+    win.parent = win;
 
-    const context = vm.createContext({ console, Promise });
-    vm.runInContext(`
-        var calls = [];
-        var _self = {};
-        async function run() {
-            if (typeof _self.submitCheckTimes === 'function') {
-                await Promise.resolve(_self.submitCheckTimes());
-            } else {
-                calls.push('skipped');
+    assert.equal(api.claim(win, '', '桌面章节页').claimed, true);
+    assert.equal(win.__xxtChapterSubmit.state, 'submitting');
+    // 跨 vm context 的对象原型不同，只能逐字段比较。
+    const blocked = api.claim(win, '', '手机章节页');
+    assert.equal(blocked.claimed, false, 'a fresh submitting lock must still block the other page');
+    assert.equal(blocked.reason, 'already-submitted');
+    assert.equal(blocked.source, '桌面章节页');
+
+    // 平台回「无效的参数：code-1！」= 这次提交根本没进去，锁必须立刻回退成可重试。
+    assert.equal(api.observe(win, '', '无效的参数：code -1!'), true);
+    assert.equal(win.__xxtChapterSubmit.state, 'failed');
+    assert.equal(api.failed(win, ''), true);
+    assert.equal(api.claim(win, '', '手机章节页').claimed, true, 'a platform rejection must release the lock');
+
+    // 平台卡住、页面被关：TTL 之后同样必须允许重试，否则章节永久停在「已提交」。
+    win.__xxtChapterSubmit = { workId: 'w1', source: '桌面章节页', state: 'submitting',
+        time: Date.now() - 61000 };
+    assert.equal(api.claim(win, '', '手机章节页').claimed, true, 'an expired submitting lock must not block');
+
+    // 已批阅是终态：任何情况下都不能被降级，也不能再重试。
+    assert.equal(api.observe(win, '', '已批阅作业，不允许重复提交!'), true);
+    assert.equal(win.__xxtChapterSubmit.state, 'reviewed');
+    assert.equal(api.observe(win, '', '无效的参数：code -1!'), true);
+    assert.equal(win.__xxtChapterSubmit.state, 'reviewed', 'a late failure alert must not downgrade a reviewed chapter');
+    assert.equal(api.claim(win, '', '桌面章节页').claimed, false);
+});
+
+// 桌面章节页只看得到本页 results；手机章节页的 AI 请求在共享注册表里。提交前必须按
+// pending 计数等待，绝不能 2 秒后硬提交一份「答了一半」的卷子。
+test('submission waits for the chapter in-flight requests instead of submitting early', async () => {
+    const from = script.indexOf('function aiChapterSubmitHost(');
+    const to = script.indexOf('var GLOBAL = {', from);
+    const context = vm.createContext({ console, Date, Map, URLSearchParams, Promise, setTimeout,
+        aiTrace: () => {}, aiClip: (text, max) => String(text).slice(0, max) });
+    vm.runInContext(script.slice(from, to) + `
+globalThis.api = { pending: aiChapterPendingRequests, wait: aiWaitChapterPendingRequests };`, context);
+    const api = context.api;
+    const win = { location: { search: '' }, document: { getElementById: () => null } };
+    win.parent = win;
+
+    assert.equal(api.pending(win, 'w1'), 0, 'an empty registry means nothing is in flight');
+    const requests = new Map();
+    win.__xxtChapterQuestionRequests = new Map([['w1', requests]]);
+    const startedAt = Date.now();
+    requests.set('id:402563592', { state: 'pending', startedAt: startedAt });
+    requests.set('id:402563590', { state: 'done', startedAt: startedAt });
+    // 页面被关掉后没人收尾的令牌不能永远拖住提交。
+    requests.set('id:stale', { state: 'pending', startedAt: startedAt - 300000 });
+    assert.equal(api.pending(win, 'w1'), 1, 'only live in-flight requests count');
+    assert.equal(api.pending(win, 'w2'), 0, 'another chapter must not be affected');
+
+    const seen = [];
+    const timer = setTimeout(() => requests.get('id:402563592').state = 'done', 120);
+    const settled = await api.wait(win, 'w1', 20000, (pending, left) => seen.push(pending));
+    clearTimeout(timer);
+    assert.equal(settled.timedOut, false, 'the wait must end as soon as the registry is clear');
+    assert.equal(settled.pending, 0);
+    assert.ok(settled.waited >= 100, 'the wait must not resolve while a request is still pending');
+
+    requests.set('id:402563592', { state: 'pending', startedAt: Date.now() });
+    const timedOut = await api.wait(win, 'w1', 300, () => {});
+    assert.equal(timedOut.timedOut, true, 'the wait must give up at the budget instead of hanging');
+    assert.equal(timedOut.pending, 1);
+});
+
+// 行为级校验：模拟真实桌面章节页的三段链路（validate 异步 → toadd 写清单 → workPop 确认），
+// 确认脚本只在平台真的把清单写好之后才提交，绝不自己造一次空表单 POST。
+test('desktop confirm helper only submits once the platform filled the pending list', async () => {
+    const submitStart = script.indexOf('function desktopChapterSubmitWindows()');
+    const submitEnd = script.indexOf('function desktopChapterTraceAlerts()', submitStart);
+    assert.ok(submitStart !== -1 && submitEnd > submitStart, 'the desktop submit helpers must be bounded');
+    const helpers = script.slice(submitStart, submitEnd);
+
+    const build = (platformWritesList, verifyDialog) => {
+        const document = {
+            getElementById: id => {
+                if (id === 'answerwqbid') return { value: platformWritesList ? '402563742,402563744,' : '' };
+                // validate 回 status==2 时平台弹验证码，此时确认框永远不会出现。
+                if (id === 'verifyCodeWin') return { style: { display: verifyDialog ? 'block' : 'none' } };
+                return null;
             }
-            calls.push('continued');
-        }
-        globalThis.run = run;
-        globalThis.calls = calls;
-    `, context);
-    return context.run().then(() => {
-        assert.deepEqual(Array.from(context.calls), ['skipped', 'continued'],
-            'a missing submitCheckTimes must not abort the submit flow');
-    });
+        };
+        const calls = [];
+        const win = {
+            document,
+            btnBlueSubmit() {
+                calls.push('btnBlueSubmit');
+                // 平台真实顺序：先发 /work/validate，回调里 toadd 写清单，最后弹确认框。
+                setTimeout(() => {
+                    // 平台被验证码拦住时不会回调 toadd，确认框压根不弹。
+                    if (verifyDialog) return;
+                    if (platformWritesList) document.getElementById('answerwqbid').value = '402563742,402563744,';
+                    win.workPop('确认提交？', '提交', '取消', () => calls.push('submitCheckTimes'));
+                }, 5);
+            },
+            workPop() { calls.push('workPop-fallback'); },
+            submitCheckTimes() { calls.push('submitCheckTimes'); }
+        };
+        win.parent = win;
+        win.top = win;
+        const context = vm.createContext({
+            console, Promise, setTimeout, Date, String,
+            _self: win,
+            sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
+            aiTrace: () => {},
+            aiChapterAlreadyReviewed: () => false,
+            aiChapterSubmitFailed: () => false,
+            aiChapterSubmitHost: () => win
+        });
+        vm.runInContext(helpers + '\nglobalThis.run = desktopChapterConfirmSubmit;\n' +
+            'globalThis.note = () => desktopChapterSubmitNote;', context);
+        return { calls, run: context.run, note: context.note, win };
+    };
+
+    const happy = build(true);
+    assert.equal(await happy.run(), true, 'a platform-confirmed submit must report success');
+    assert.deepEqual(happy.calls, ['btnBlueSubmit', 'submitCheckTimes'],
+        'the submit must come from the platform confirm callback, not a manual call');
+    assert.equal(happy.win.workPop('确认提交？', '提交', '取消', () => {}), undefined,
+        'the workPop hook must be released after submitting');
+
+    const broken = build(false);
+    assert.equal(await broken.run(), false, 'an unconfirmable submit must not be reported as success');
+    // 平台的确认框原样交给用户（workPop-fallback），绝不能自己发一次空表单提交。
+    assert.deepEqual(broken.calls, ['btnBlueSubmit', 'workPop-fallback'],
+        'an empty pending list must never produce a submit POST');
+    assert.equal(broken.win.workPop('确认提交？', '提交', '取消', () => {}), undefined,
+        'the workPop hook must be released even when the submit was refused');
+
+    // validate 回 status==2（验证码）时平台不会回调 toadd，确认框压根不弹：
+    // 必须立刻停下并报出验证码，不能让用户白等 15 秒，也不能谎报「凭证未就绪」。
+    const verified = build(false, true);
+    assert.equal(await verified.run(), false, 'a captcha-blocked submit must not be reported as success');
+    assert.deepEqual(verified.calls, ['btnBlueSubmit'], 'a captcha block must not produce a submit POST');
+    assert.match(verified.note(), /验证码/, 'the blocking reason must be reported to the panel');
 });
 
 test('confirm override defers to the platform unless the script holds the submit lock', () => {
