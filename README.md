@@ -6,6 +6,8 @@
 - 许可证：`GPL-3.0-or-later`
 - 作者：`@author unrival, li_stu`（原作者 unrival，当前维护者 li_stu）
 - 主文件：[超星学习通助手.user.js](./超星学习通助手.user.js)
+- 源码仓库：<https://github.com/hjm-al/chaoxing-assistant>
+- 问题反馈：<https://github.com/hjm-al/chaoxing-assistant/issues>
 - 使用教程：[使用教程.md](./使用教程.md)（安装、每个按钮的作用、AI 配置、常见问题）
 - 第三方组件与数据许可：[THIRD-PARTY-NOTICES.md](./THIRD-PARTY-NOTICES.md)
 - 依赖：脚本管理器（Tampermonkey / Violentmonkey / ScriptCat）＋ 一个可选的 OpenAI 兼容大模型接口
@@ -85,8 +87,12 @@ LLM 表单在面板渲染时就已经由脚本挂进 `#llmSettingsContainer`（�
    - [Tampermonkey](https://www.tampermonkey.net/)
    - [Violentmonkey](https://violentmonkey.github.io/)
    - [ScriptCat](https://scriptcat.org/)
-2. 新建用户脚本，粘贴 [超星学习通助手.user.js](./超星学习通助手.user.js) 的全部内容并保存。
+2. 二选一完成安装：
+   - **在线安装（推荐）**：打开 [脚本猫脚本页](https://scriptcat.org/zh-CN/script-show-page/8922)，点「安装此脚本」，版本更新由脚本管理器自动处理；
+   - **手动安装**：新建用户脚本，粘贴 [超星学习通助手.user.js](./超星学习通助手.user.js) 的全部内容并保存，但这样收不到自动更新。
 3. 打开超星学习通课程页，脚本 `@run-at document-end` 自动注入。
+
+源码与历史版本都在 <https://github.com/hjm-al/chaoxing-assistant>，遇到问题请提到 [Issues](https://github.com/hjm-al/chaoxing-assistant/issues)。
 
 脚本需要以下 GM API：`GM_xmlhttpRequest`、`GM_setValue`、`GM_getValue`、`GM_info`、`GM_getResourceText`、`unsafeWindow`。若脚本管理器未授权 `GM_xmlhttpRequest` 的跨域请求，AI 功能会失败。
 
@@ -180,6 +186,8 @@ https://nuoapi.net/register
 ```
 
 仓库没有 `package.json`，所有工具脚本都只依赖 Node.js 内置模块（浏览器夹具额外依赖 Playwright）。
+
+字体映射表的静态镜像单独放在 <https://github.com/hjm-al/chaoxing-font-table>（原表作者 wyn665817，MIT）。它不随脚本仓库发布，只在 `@resource` 上游失效时作为替换地址，详见 [THIRD-PARTY-NOTICES.md](./THIRD-PARTY-NOTICES.md)。
 
 ## 界面模板（`XXT_UI` 模块）
 

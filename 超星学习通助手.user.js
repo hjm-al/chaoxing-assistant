@@ -55,6 +55,9 @@
 // @require       https://lib.baomitu.com/jquery/3.6.0/jquery.min.js
 // @require       https://lib.baomitu.com/promise-polyfill/8.3.0/polyfill.min.js
 // @license       GPL-3.0-or-later
+// @homepageURL   https://github.com/hjm-al/chaoxing-assistant
+// @supportURL    https://github.com/hjm-al/chaoxing-assistant/issues
+// @source        https://github.com/hjm-al/chaoxing-assistant
 // @original-script https://scriptcat.org/zh-CN/script-show-page/1693
 // @original-author unrival
 // @original-license GPL-3.0-or-later
