@@ -1,12 +1,12 @@
 // ==UserScript==
 // @name          【超星学习通助手】更新AI解答+视频+测试+考试（使用AI进行答题）
 // @namespace     li_stu
-// @version       2.41
-// @description   基于脚本猫 1693（unrival，GPL-3.0）二次开发并持续维护（维护者 li_stu）；第三方AI模型（OpenAI兼容接口，提示词固定前置提升缓存命中率，统计AI调用次数与缓存命中率，支持SSE流式响应解析，可跳过已作答题目，支持NuoAPI一键获取密钥）；学习通面板内置AI问答（直接调用LLM设置里保存的接口）；支持图片/听力题文本化、图书/链接/速课/直播任务、单实例运行与多窗口提示
+// @version       2.43
+// @description   【完全免费】超星学习通：视频/文档/图书全自动，测验作业考试 AI 答题可选，验证码风控自动暂停续跑。基于脚本猫 1693（unrival，GPL-3.0）二次开发，维护者 li_stu
 // @name:zh-TW   【超星學習通助手】更新AI解答+影片+測驗+考試（AI輔助）
 // @name:en      Chaoxing Learning Assistant [AI Answer][Video][Quiz][Exam]
-// @description:zh-TW  基於腳本貓 1693（unrival，GPL-3.0）二次開發並持續維護（維護者 li_stu）；第三方AI模型輔助（OpenAI相容介面，提示詞固定前置提升快取命中率，統計AI呼叫次數與快取命中率，支援SSE串流回應解析，可跳過已作答題目，支援NuoAPI一鍵取得金鑰）；學習通面板內建AI問答（直接呼叫LLM設定中儲存的介面）；支援圖片/聽力題文字化、圖書/連結/速課/直播任務、單實例執行與多視窗提示
-// @description:en     Derived from ScriptCat 1693 by unrival (GPL-3.0), maintained by li_stu. Adds a freely configurable OpenAI-compatible LLM helper (cache-friendly prompt order, AI call/cache-hit stats, SSE streaming parsing, skip answered questions, NuoAPI key shortcut), an in-panel AI chat using the saved LLM config, media-to-text question extraction, book/link/micro-course/live tasks, single-instance detection, and a multi-window course warning.
+// @description:zh-TW   【完全免費】超星學習通：影片/文件/圖書全自動，測驗作業考試 AI 答題可選，驗證碼風控自動暫停續跑。基於腳本貓 1693（unrival，GPL-3.0）二次開發，維護者 li_stu
+// @description:en     Free Chaoxing helper: fully automatic video / document / book, optional AI answering for quizzes and exams, auto-pauses at the platform captcha and resumes from the breakpoint. Derived from ScriptCat 1693 by unrival (GPL-3.0), maintained by li_stu.
 // @antifeature payment  脚本会请求第三方AI接口进行答题，您可以选择停用相关功能
 // @antifeature:zh-TW payment 腳本會請求第三方AI介面進行答題，您可以選擇停用相關功能
 // @antifeature:en payment The script requests third-party AI APIs for answering. You can disable this feature.
@@ -33,6 +33,7 @@
 // @connect       pan-yz.chaoxing.com
 // @connect       api.deepseek.com
 // @connect       nuoapi.net
+// @connect       api.higanai.top
 // @connect       localhost
 // @connect       127.0.0.1
 // @connect       *
@@ -40,7 +41,7 @@
 //   passport2-api.chaoxing.com  登录态校验与用户信息
 //   zhibo.chaoxing.com          直播回放观看进度上报
 //   pan-yz.chaoxing.com         仅用于 @icon 图标与运行日志截图，非接口请求
-//   api.deepseek.com / nuoapi.net / localhost / 127.0.0.1  内置 AI 预设
+//   api.deepseek.com / nuoapi.net / api.higanai.top / localhost / 127.0.0.1  内置 AI 预设
 // AI 接口地址由用户在「LLM 配置」中自行填写（DeepSeek / Ollama / NuoAPI / 其他 OpenAI 兼容服务），
 // 目标域名无法在打包时枚举，因此保留 `*`；声明具体域名只为让审核能对上代码，不缩小用户可用范围。
 // @resource      Vue https://lib.baomitu.com/vue/2.6.0/vue.min.js
@@ -919,6 +920,26 @@ __XXT_TOKENS__
                 color: #718096;
                 overflow-wrap: anywhere;
             }
+            .xxt-page .xxt-risk-bar {
+                margin-top: 8px;
+                padding: 8px;
+                border: 1px solid #f0b4b4;
+                border-radius: 6px;
+                background: #fff5f5;
+            }
+            .xxt-page .xxt-risk-head {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: 8px;
+                font-size: 12px;
+                color: #a12a2a;
+            }
+            .xxt-page .xxt-risk-head .xxt-risk-text {
+                flex: 1 1 240px;
+                min-width: 0;
+                overflow-wrap: anywhere;
+            }
             .xxt-page .xxt-llm-panel {
                 width: 100%;
                 min-width: 0;
@@ -1083,6 +1104,14 @@ __XXT_TOKENS__
                                 <span class="xxt-section-tip">最近 240 条，自动滚动</span>
                             </div>
                             <div class="panel-body">
+                                <div class="xxt-risk-bar" id="riskControlBar" style="display: none;">
+                                    <div class="xxt-risk-head">
+                                        <span class="xxt-risk-text" id="riskControlText">平台要求输入验证码，学习任务已暂停</span>
+                                        <a class="btn btn-default btn-xs" id="riskControlVerifyButton" href="#"
+                                            target="_blank" rel="noopener">去验证</a>
+                                        <a class="btn btn-success btn-xs" id="riskControlResumeButton">已验证，继续</a>
+                                    </div>
+                                </div>
                                 <div id="result">
                                     <div id="log">
                                         <span data-xxt-log-placeholder style="color: red">[00:00:00]如果此提示不消失，说明页面出现了错误，请联系作者</span>
@@ -1135,8 +1164,8 @@ button:hover{border-color:#93b9f5;background:#f7fbff}button.primary:hover{backgr
 <div class="row"><label>预设</label><div class="ctl"><select id="preset"></select></div></div>
 <div class="row"><label>接口地址</label><div class="ctl"><input id="url" placeholder="https://api.deepseek.com"></div></div>
 <div class="row"><label>API Key</label><div class="ctl"><input id="key" type="password" placeholder="sk-..."><span class="hint" id="showKey">显示</span></div></div>
-<div class="row"><label>获取密钥</label><div class="ctl"><a href="https://nuoapi.net/register" target="_blank" rel="noopener" style="color:#3b82f6;font-size:12px;line-height:1.6;">获取 NuoAPI 密钥</a><span class="hint" style="cursor:default;color:#8a97a6;">注册送 $1 额度（以官网活动为准），够刷 1000+ 题；也可用「自定义」接别家</span></div></div>
-<div class="row"><label>模型</label><div class="ctl"><select id="model"><option value="">请先获取模型列表</option></select><button id="fetchModels" type="button">获取模型列表</button></div></div>
+<div class="row"><label>获取密钥</label><div class="ctl"><a href="https://nuoapi.net/register" target="_blank" rel="noopener" style="color:#3b82f6;font-size:12px;line-height:1.6;">获取 NuoAPI 密钥</a><span class="hint" style="cursor:default;color:#8a97a6;">注册即送 $1 额度（以官网当前活动为准）；国模福利分组 1 元通常可完成 5000+ 道题，普通 GPT 低价分组约 500+ 道题；也可用「自定义」接别家</span></div></div>
+<div class="row"><label>模型</label><div class="ctl"><select id="model"><option value="">请先获取模型列表</option></select><button id="fetchModels" type="button">获取模型列表</button><span class="hint" style="cursor:default;color:#8a97a6;line-height:1.6;">NuoAPI 注册即送 $1（以官网当前活动为准）。模型列表中如存在「国模福利分组」，任何用户均可选择其中的 <code>deepseek-v4.1-flash</code>，适合高频答题；按当前价格，1 元通常可完成 5000+ 道题。普通 GPT 低价分组约 500+ 道题；实际价格、可用模型和额度以账户后台为准。</span></div></div>
 <div class="row"><label>跳过已作答</label><div class="ctl"><label style="font-size:12px;color:#526273;"><input type="checkbox" id="skip_answered" style="width:auto;margin-right:6px;vertical-align:middle;">已作答题目不覆盖</label></div></div>
 <div class="row"><label>超时 / 温度</label><div class="ctl"><input id="timeout" type="number" min="3000" step="1000" placeholder="超时 22000ms"><input id="temperature" type="number" min="0" max="2" step="0.1" placeholder="温度 0.2"><input id="max_tokens" type="number" min="1" step="64" placeholder="max_tokens 1024"></div></div>
 <div class="row"><label>失败重试</label><div class="ctl"><input id="retries" type="number" min="0" max="5" step="1" placeholder="重试次数 2"><span class="hint" style="cursor:default;color:#8a97a6;">遇到 429/5xx/超时自动重试，0 表示不重试</span></div></div>
@@ -1166,7 +1195,7 @@ button:hover{border-color:#93b9f5;background:#f7fbff}button.primary:hover{backgr
 <div id="stats" style="margin-top:8px;padding:0 2px;font-size:12px;color:#718096;line-height:1.6;white-space:pre-wrap;">AI 调用统计加载中…</div>
 <script>
 var AI_NONCE="__AI_NONCE__";
-var PRESETS=[{n:"自定义",u:"",m:""},{n:"DeepSeek",u:"https://api.deepseek.com",m:"deepseek-flash"},{n:"Ollama本地",u:"http://localhost:11434/v1",m:"qwen2.5:7b"},{n:"NuoAPI",u:"https://nuoapi.net/v1",m:"gpt-5.6-luna"}];
+var PRESETS=[{n:"自定义",u:"",m:""},{n:"DeepSeek",u:"https://api.deepseek.com",m:"deepseek-flash"},{n:"Ollama本地",u:"http://localhost:11434/v1",m:"qwen2.5:7b"},{n:"NuoAPI",u:"https://nuoapi.net/v1",m:"gpt-5.6-luna"},{n:"Higan API",u:"https://api.higanai.top/v1",m:""}];
 var MODELS=["deepseek-flash","deepseek-v4-pro","qwen2.5:7b","gpt-5.6-luna"];
 function $(id){return document.getElementById(id);}
 function aiShowStatus(msg,type){var s=$("status");if(!s)return;s.textContent=msg;s.className=type||"";}
@@ -1311,6 +1340,52 @@ function aiChapterWorkId(sourceWindow, hint) {
     return /^[A-Za-z0-9_-]{1,80}$/.test(String(id).replace(/^work-/, '')) ? String(id).replace(/^work-/, '') : '';
 }
 
+// 回收章节共享注册表里的历史令牌。注册表挂在顶层窗口上，而顶层窗口在切章时不会
+// 重建：只写不删的话，每切一个章节就会永久留下一份已销毁 iframe 的 document
+// （令牌的 root 与 signature 闭包都指向它），顶层窗口活得越久占用越大。
+// 回收口径必须保守：题目节点被重渲染并不代表 AI 请求已经结束，pending 只按
+// aiChapterPendingRequests 已有的存活上限回收。终态令牌挂在已脱离文档的节点上时
+// 它本就已经 isLive() === false，删掉不会改变任何拦截行为。
+function aiPruneChapterTokens(requests, now) {
+    if (!(requests instanceof Map) || !requests.size) return;
+    var time = Number(now) > 0 ? Number(now) : Date.now();
+    var expired = [];
+    requests.forEach(function (token, id) {
+        // 没有令牌对象、也没有任何时间依据的条目是垃圾，直接回收。
+        if (!token) { expired.push(id); return; }
+        if (token.state === 'pending') {
+            // 页面被关掉后令牌没人收尾，超期就不再算在途，也不再阻止提交。
+            if (!(time - Number(token.startedAt || 0) <= AI_CHAPTER_PENDING_STALE_MS)) expired.push(id);
+            return;
+        }
+        if (token.root && token.root.isConnected === false) { expired.push(id); return; }
+        if (!(time - Number(token.endedAt || token.startedAt || 0) <= AI_CHAPTER_TOKEN_RETENTION_MS)) expired.push(id);
+    });
+    for (var i = 0; i < expired.length; i++) requests.delete(expired[i]);
+}
+
+// 顺带把已经空掉的章节条目从注册表里摘掉，并给注册表一个硬上限：
+// 一次性刷很多章节的极端场景下，空的 workId 条目本身也会一直堆着。
+// 当前章节一律不动：它还要参与「另一页面已完成」的跨页去重，那一步不检查 isLive()。
+function aiPruneChapterRegistry(registry, currentWorkId) {
+    if (!(registry instanceof Map) || !registry.size) return;
+    var now = Date.now();
+    registry.forEach(function (requests, workId) {
+        if (workId === currentWorkId) return;
+        if (!(requests instanceof Map)) { registry.delete(workId); return; }
+        aiPruneChapterTokens(requests, now);
+        if (!requests.size) registry.delete(workId);
+    });
+    if (registry.size <= AI_CHAPTER_REGISTRY_MAX) return;
+    // Map 保持插入顺序，从最早建立的章节开始清，且绝不清理还有在途请求的章节。
+    registry.forEach(function (requests, workId) {
+        if (registry.size <= AI_CHAPTER_REGISTRY_MAX || workId === currentWorkId) return;
+        var busy = false;
+        if (requests instanceof Map) requests.forEach(function (token) { if (token && token.state === 'pending') busy = true; });
+        if (!busy) registry.delete(workId);
+    });
+}
+
 function aiChapterQuestionScope(sourceWindow, hint) {
     var workId = aiChapterWorkId(sourceWindow, hint);
     if (!workId) return null;
@@ -1320,6 +1395,7 @@ function aiChapterQuestionScope(sourceWindow, hint) {
         var blocked = aiChapterSubmitBlocking(submit, workId);
         var registry = host.__xxtChapterQuestionRequests;
         if (!(registry instanceof Map)) registry = host.__xxtChapterQuestionRequests = new Map();
+        aiPruneChapterRegistry(registry, workId);
         var requests = registry.get(workId);
         if (!requests) {
             requests = new Map();
@@ -1406,9 +1482,24 @@ function aiObserveChapterAlert(sourceWindow, hint, message) {
         }
         return true;
     }
+    // 风控（antispider）拦截的提交也必须回退锁：那不是「参数错误」，
+    // 用户完成验证后重交一次就能成，锁在 submitting 会让重交永远被自己挡掉。
+    if (xxtRiskControlMark(text)) {
+        var riskId = aiChapterWorkId(sourceWindow, hint);
+        aiTrace('平台要求完成验证码（风控），已回退提交锁，验证后可重新提交', 'warn', sourceWindow);
+        if (!riskId) return true;
+        try {
+            var riskHost = aiChapterSubmitHost(sourceWindow);
+            var riskCurrent = riskHost.__xxtChapterSubmit;
+            if (riskCurrent && riskCurrent.workId === riskId && riskCurrent.state === 'reviewed') return true;
+            riskHost.__xxtChapterSubmit = { workId: riskId, source: 'platform', state: 'failed', time: Date.now(),
+                message: '风控验证未完成' };
+        } catch (error) {}
+        return true;
+    }
     if (!AI_CHAPTER_SUBMIT_REJECT.test(text)) return false;
     // 平台拒绝了这次提交（无效的参数 / code-1 / 不能为空…）。这里的锁必须立刻回退成
-    // 可重试，否则一次「无效的参数：code-1！| 就会把这个章节永久锁在 submitting，
+    // 可重试，否则一次「无效的参数：code-1！」就会把这个章节永久锁在 submitting，
     // 后续所有提交都被「已有提交流程」挡掉，用户只能刷新页面重来。
     var rejectId = aiChapterWorkId(sourceWindow, hint);
     aiTrace('平台拒绝提交（' + text + '），已回退提交锁，可重新尝试', 'warn', sourceWindow);
@@ -1433,6 +1524,10 @@ var AI_CHAPTER_SUBMIT_TTL_MS = 60000;
 var AI_CHAPTER_PENDING_WAIT_MS = 60000;
 // 在途请求的存活上限：页面被关掉后令牌没人收尾，超时后不再算 pending。
 var AI_CHAPTER_PENDING_STALE_MS = 120000;
+// 章节共享注册表的两个回收上限：终态令牌最多留这么久，章节条目数再兜一个硬顶。
+// 注册表挂在顶层窗口上，顶层窗口切章时不会重建，不设上限就会一直长。
+var AI_CHAPTER_TOKEN_RETENTION_MS = 30 * 60 * 1000;
+var AI_CHAPTER_REGISTRY_MAX = 8;
 // 平台拒绝提交时的弹窗文案。命中后把提交锁回退成可重试。
 // `code-1` 必须带分隔符才算：模型/接口侧的普通 `code1` 不能被误判成提交被拒。
 var AI_CHAPTER_SUBMIT_REJECT = /无效的参数|不能为空|参数错误|提交失败|code\s*[-:：]\s*-?1\b/;
@@ -1513,6 +1608,10 @@ var GLOBAL = {
     fillAnswerDelay: 500,
     //逐题处理间隔，单位秒。低于 10 秒时代码会抬到 12 秒，见 GLOBAL.questionInterval
     questionInterval: 12,
+    //逐题随机浮动上限，单位秒。每题在 questionInterval 之上再随机多等 0~该值，避免节奏精确到秒
+    answerJitter: 4,
+    //保存/提交随机浮动上限，单位秒。发起保存或提交前在固定基数上再随机多等 0~该值
+    saveJitter: 3,
     //答题面板 iframe 的高度，单位px可以适当调整。屏幕装不下时按视口自动收缩，不会超出可视区。
     length: 720,
 };
@@ -1523,6 +1622,32 @@ function questionIntervalSeconds() {
     var value = Number(GLOBAL.questionInterval);
     if (!isFinite(value) || value <= 0) return 12;
     return value < 10 ? 12 : value;
+}
+
+// 固定节奏本身也是特征：机械的「每隔整 12 秒答一题、整 2 秒后保存」比慢一点更像脚本。
+// 所有等待都在固定基数上加 0~range 秒的随机浮动；Math.random() 返回 0 时不加浮动，
+// 回归测试据此仍能拿到确定的时长。
+// 配置读取做成容错形式：部分回归夹具只注入调度片段，页面里并没有完整的 GLOBAL 对象。
+function jitterSeconds(key) {
+    if (typeof GLOBAL === 'undefined' || !GLOBAL) return 0;
+    return GLOBAL[key];
+}
+
+function jitterMs(rangeSeconds) {
+    var range = Number(rangeSeconds);
+    if (!isFinite(range) || range <= 0) return 0;
+    return Math.floor(Math.random() * range * 1e3);
+}
+
+// 逐题等待时长：风控间隔 + 0~answerJitter 秒随机浮动。
+function answerIntervalMs() {
+    return questionIntervalSeconds() * 1e3 + jitterMs(jitterSeconds('answerJitter'));
+}
+
+// 保存 / 提交前的等待时长：固定基数 + 0~saveJitter 秒随机浮动。
+function saveDelayMs(baseMs) {
+    var base = Number(baseMs);
+    return (isFinite(base) && base > 0 ? base : 0) + jitterMs(jitterSeconds('saveJitter'));
 }
 
 // 「跳过已作答」不调用 AI，不需要风控间隔，只留一个极短的让步避免死循环空转。
@@ -1850,8 +1975,33 @@ function aiBuildMessages(data, cfg) {
 function aiNormalize(text) {
     var t = String(text == null ? "" : text).trim();
     t = t.replace(/\`\`\`[\s\S]*?\`\`\`/g, function (s) { return s.replace(/\`\`\`[a-zA-Z]*/g, "").replace(/\`\`\`/g, ""); });
+    t = t.replace(/[\uFF21-\uFF3A\uFF41-\uFF5A]/g, function (ch) { return String.fromCharCode(ch.charCodeAt(0) - 0xFEE0); });
     t = t.replace(/^(最终答案|正确答案|参考答案|答案|final answer|correct answer|answer)\s*[:：]?\s*/i, "").trim();
     return t;
+}
+// 模型经常把答案连同解析一起给出，或把答案包在代码块 / 反引号 / 列表符号里。
+// 这些修饰不属于答案内容，但会直接让「只认单行字母」的解析失败，所以先剥干净再交给 aiParseAnswer。
+function aiStripAnswerDecorations(text) {
+    var t = String(text == null ? "" : text).trim();
+    if (!t) return '';
+    t = t.replace(/^[ \t]*[-*·+•][ \t]+/gm, '');
+    t = t.replace(/^[ \t]*\d+[.、)）][ \t]+/gm, '');
+    t = t.replace(/^[ \t]*#{1,6}[ \t]+/gm, '');
+    t = t.replace(/^[ \t>]+/gm, '');
+    t = t.replace(/^[*_~`]+|[*_~`]+$/gm, '');
+    t = t.replace(/^[「『“"【\[（(]+|[」』”"】\]）)]+$/gm, '');
+    // 「选项A」「答案是 A」「是 C」都是同一个意思，剥掉修饰词后再走字母规则。
+    // 只收中文修饰词：英文里 "The answer is C" 这类叙述句必须继续判为不可作答。
+    t = t.replace(/^(?:(?:正确选项|选项|答案)\s*)?[是为]?\s*[:：]?\s*([A-H])(?:\s*[.。、．:：)）])?$/i, '$1');
+    return t.trim();
+}
+// 只保留答案段：出现「解析 / 分析 / 说明 / 理由」这类分段标题时，标题之后的内容一律丢弃，
+// 否则模型附带的解释会把单行模板撑成多行，解析阶段会直接判为不可用。
+function aiAnswerSegment(text) {
+    var t = String(text == null ? '' : text);
+    var cut = t.search(/(?:^|\n)\s*(?:[\u3010\[]?\s*(?:解析|分析|说明|理由|解释|考点|备注|思路|依据)\s*[\u3011\]]?\s*[:：]?|[\u3010\[]?\s*(?:explanation|analysis|reasoning)\s*[\u3011\]]?\s*[:：])/i);
+    if (cut > 0) t = t.slice(0, cut);
+    return t.trim();
 }
 function aiMapOptionAnswers(answers, options) {
     if (!(answers instanceof Array) || !(options instanceof Array) || answers.length === 0) return null;
@@ -1957,6 +2107,15 @@ function aiToggleOption(node, isSelected) {
 function aiParseAnswer(text, data) {
     var t = aiNormalize(text);
     if (!t) return [];
+    var primary = aiParseAnswerStrict(t, data);
+    if (primary.length > 0) return primary;
+    // 严格模式失败后才尝试宽容模式，避免宽容规则把「C or D」「C\nActually D」这类
+    // 明确不该作答的回复猜成答案。
+    var relaxed = aiAnswerSegment(aiStripAnswerDecorations(t));
+    if (!relaxed || relaxed === t) return [];
+    return aiParseAnswerStrict(relaxed, data);
+}
+function aiParseAnswerStrict(t, data) {
     var firstLine = t.split(/\r?\n/).filter(function (l) { return l.trim() !== ""; })[0] || t;
     firstLine = firstLine.trim();
     var type = data.type;
@@ -2005,6 +2164,94 @@ function aiParseAnswer(text, data) {
 }
 var aiQuestionRequests = new WeakMap();
 var aiQuestionSequence = 0;
+var AI_CROSS_PAGE_ANSWER_TTL_MS = 10 * 60 * 1000;
+// 跨页面缓存使用规范化后的题干和有序选项指纹，避免手机页/桌面页 URL 或标点差异影响复用。
+function aiAnswerCacheText(value) {
+    return String(value == null ? '' : value).replace(/[\u3000\s]+/g, '').replace(/[（(]/g, '(')
+        .replace(/[）)]/g, ')').replace(/[，,]/g, ',').replace(/[。.!！!？?；;]/g, '').toLowerCase();
+}
+function aiAnswerCacheContext(workId, questionId, type, question, options) {
+    var rows = Array.isArray(options) ? options.map(function (option) {
+        // 手机页带平台 value，桌面页通常只有文本；跨页身份只使用有序规范化文本，避免两种 DOM 表示无法互认。
+        return aiAnswerCacheText(option && typeof option === 'object' ? (option.text || option.value || '') : option);
+    }) : [];
+    return {
+        workId: String(workId || 'global'),
+        questionId: String(questionId || ''),
+        type: Number(type),
+        questionFingerprint: aiAnswerCacheText(question),
+        optionFingerprint: JSON.stringify(rows)
+    };
+}
+function aiAnswerCacheKey(context) {
+    if (!context || !context.workId || !context.questionFingerprint || !context.optionFingerprint) return '';
+    return JSON.stringify([context.workId, context.questionId, context.type, context.questionFingerprint, context.optionFingerprint]);
+}
+function aiCrossPageAnswerCache(sourceWindow) {
+    var host = aiChapterSubmitHost(sourceWindow);
+    try {
+        if (!host.__xxtCrossPageAnswers) host.__xxtCrossPageAnswers = new Map();
+        return host.__xxtCrossPageAnswers;
+    } catch (error) {
+        return null;
+    }
+}
+function aiGetCrossPageAnswer(sourceWindow, context) {
+    var key = aiAnswerCacheKey(context);
+    if (!key) return null;
+    var cache = aiCrossPageAnswerCache(sourceWindow);
+    if (!cache) return null;
+    var record = cache.get(key);
+    if (!record || Date.now() - record.time > AI_CROSS_PAGE_ANSWER_TTL_MS || !Array.isArray(record.answers) || !record.answers.length) {
+        if (record) cache.delete(key);
+        aiSweepCrossPageAnswers(cache, Date.now());
+        return null;
+    }
+    return record.answers.slice();
+}
+// 缓存挂在顶层窗口上，跨章节共用。之前只在「查到过期那条」时删，键却是整段
+// 题干+选项指纹的 JSON，长会话里每答一题就多一条永不回收的记录。
+// 查和写都顺手扫一遍过期项，量级只有几十到几百条，开销可以忽略。
+// 唯一的例外是 aiWaitCrossPageAnswer 每 250ms 轮询一次 miss，那里用节流兜住，
+// 否则一次 60 秒的等待会白白全表扫两百多遍。
+var AI_CROSS_PAGE_SWEEP_INTERVAL_MS = 5000;
+var aiCrossPageSweepAt = new WeakMap();
+function aiSweepCrossPageAnswers(cache, now, force) {
+    if (!(cache instanceof Map) || !cache.size) return;
+    var time = Number(now) > 0 ? Number(now) : Date.now();
+    if (!force) {
+        var last = aiCrossPageSweepAt.get(cache);
+        if (last && time - last >= 0 && time - last < AI_CROSS_PAGE_SWEEP_INTERVAL_MS) return;
+    }
+    aiCrossPageSweepAt.set(cache, time);
+    var expired = [];
+    cache.forEach(function (record, key) {
+        if (!record || !Array.isArray(record.answers) || !record.answers.length) { expired.push(key); return; }
+        if (time - Number(record.time || 0) > AI_CROSS_PAGE_ANSWER_TTL_MS) expired.push(key);
+    });
+    for (var i = 0; i < expired.length; i++) cache.delete(expired[i]);
+}
+function aiRememberCrossPageAnswer(sourceWindow, context, answers) {
+    var key = aiAnswerCacheKey(context);
+    if (!key || !Array.isArray(answers) || !answers.length) return;
+    var cache = aiCrossPageAnswerCache(sourceWindow);
+    if (!cache) return;
+    aiSweepCrossPageAnswers(cache, Date.now(), true);
+    cache.set(key, { time: Date.now(), answers: answers.slice() });
+}
+function aiWaitCrossPageAnswer(sourceWindow, context, timeout) {
+    var limit = Math.max(0, Number(timeout) || 0);
+    var started = Date.now();
+    return new Promise(function (resolve) {
+        var check = function () {
+            var answers = aiGetCrossPageAnswer(sourceWindow, context);
+            if (answers) { resolve(answers); return; }
+            if (Date.now() - started >= limit) { resolve(null); return; }
+            setTimeout(check, 250);
+        };
+        check();
+    });
+}
 // 判断两条请求记录是否指向同一道题。题目 ID 在新版考试页上常常缺失或重名，不能当
 // 唯一标识：一旦按 ID 判重，第 1 题答完后留下的 done 记录会把后面所有同 ID 的题
 // 全挡成「已有处理请求」，整卷一道也答不了。因此以 DOM 节点为准。
@@ -2012,7 +2259,7 @@ function aiSameQuestionRoot(a, b) {
     if (!a || !b) return false;
     return a === b || !!(a.root && b.root && a.root === b.root);
 }
-function aiBeginQuestion(root, key, source, signature, chapterWorkId, position) {
+function aiBeginQuestion(root, key, source, signature, chapterWorkId, position, cacheContext) {
     var doc = root.ownerDocument;
     var requests = aiQuestionRequests.get(doc);
     if (!requests) { requests = new Map(); aiQuestionRequests.set(doc, requests); }
@@ -2040,7 +2287,12 @@ function aiBeginQuestion(root, key, source, signature, chapterWorkId, position) 
         duplicate && previous.isLive()) {
         blocking = previous;
     }
-    if (!blocking && sharedPrevious && (sharedPrevious.state === "pending" || sharedPrevious.state === "done")) blocking = sharedPrevious;
+    if (!blocking && sharedPrevious && sharedPrevious.state === "pending") blocking = sharedPrevious;
+    // 另一页面已经完成同题时，只在缓存身份完全一致的情况下放行本地流程：
+    // 后续仍由当前页面映射、点击并回读选中状态，绝不把缓存当成页面完成结果。
+    if (!blocking && sharedPrevious && sharedPrevious.state === "done" && !aiGetCrossPageAnswer(sourceWindow, cacheContext)) {
+        blocking = sharedPrevious;
+    }
     if (blocking) {
         aiTrace(aiQuestionRef(blocking) + '（' + aiQuestionLabel(blocking) + '）仍处于' + (blocking.state === 'pending' ? '处理中' : '已完成') + '状态，' + aiSourceName(source) + '本次跳过（重复请求已拦截）', 'info', sourceWindow);
         return null;
@@ -2346,6 +2598,28 @@ function aiReleaseRequestSlot() {
     aiRequestSlots.active += 1;
     setTimeout(next, 0);
 }
+// 4xx 是「配置不对」而不是「等一等就好」：不区分 401 与 402 时用户只会反复重试，
+// 所以这里把状态码翻成「该改哪一处」的具体动作。
+function aiStatusAdvice(status) {
+    var code = parseInt(status, 10);
+    if (!isFinite(code) || code < 100) return '';
+    if (code === 400) return '请求被拒绝，多为模型名不受支持或提示词过长，可先换模型重试';
+    if (code === 401) return 'API Key 无效或已过期，请到 LLM 设置重新填写密钥';
+    if (code === 402) return '账户额度不足，请到服务商后台充值后再试';
+    if (code === 403) return 'Key 没有该模型的调用权限或账户被限制，请检查服务商的令牌与模型权限';
+    if (code === 404) return '接口地址或模型名不存在，请核对「接口地址」与「模型」两栏';
+    if (code === 413 || code === 422) return '请求内容超长或被参数校验拒绝，可缩短提示词或换模型';
+    if (code === 429) return '触发限流或额度用尽，请稍后重试并在服务商后台查看余额';
+    if (code >= 500) return '服务商接口异常，可稍后重试；持续失败请更换服务商';
+    return '';
+}
+function aiOutcomeStatus(outcome) {
+    var matched = String(outcome || '').match(/^HTTP (\d{3})/);
+    return matched ? parseInt(matched[1], 10) : 0;
+}
+function aiOutcomeAdvice(outcome) {
+    return aiStatusAdvice(aiOutcomeStatus(outcome));
+}
 function aiHttpErrorDetail(response) {
     var raw = String(response && response.responseText || '');
     if (!raw) return '';
@@ -2359,6 +2633,33 @@ function aiHttpErrorDetail(response) {
     return '';
 }
 var aiFailureRecords = {};
+// 最近一次请求的结束原因（含「配置测试」这种被 aiRecordRequestOutcome 排除的请求）。
+// 设置面板只能拿到 ok/text，要指出「哪一栏填错了」必须把状态码带回去。
+var aiLastOutcomes = {};
+function aiRememberLastOutcome(requestId, outcome) {
+    var list = Object.keys(aiLastOutcomes);
+    if (list.length > 20) delete aiLastOutcomes[list[0]];
+    aiLastOutcomes[String(requestId || '配置测试')] = String(outcome || '');
+}
+function aiLastFailureAdvice(requestId) {
+    var outcome = aiLastOutcomes[String(requestId || '配置测试')];
+    var status = aiOutcomeStatus(outcome);
+    var advice = aiStatusAdvice(status);
+    if (!advice) return '';
+    return 'HTTP ' + status + ' · ' + advice;
+}
+// 同一个配置问题会让每道题都失败一次，逐题重复同一条建议只会把日志刷满。
+// 连续第 3 次命中同一条建议时提示一次根因，之后静默，等结论变了再重新计数。
+var aiAdviceStreak = { advice: '', count: 0 };
+function aiTrackAdviceStreak(outcome) {
+    var advice = aiOutcomeAdvice(outcome);
+    if (!advice) { aiAdviceStreak.advice = ''; aiAdviceStreak.count = 0; return; }
+    if (aiAdviceStreak.advice === advice) aiAdviceStreak.count += 1;
+    else { aiAdviceStreak.advice = advice; aiAdviceStreak.count = 1; }
+    if (aiAdviceStreak.count === 3) {
+        aiTrace('连续 3 次 AI 请求都因同一配置问题失败：' + advice + '（同类失败已合并，修好前后续题目仍会跳过）', 'warn');
+    }
+}
 // 记录每个请求实际发生的尝试次数，供 aiBeginQuestion 收尾日志显示「AI 共 N 次尝试」。
 var aiAttemptTotals = {};
 function aiTrackRequestAttempts(requestId, attempts) {
@@ -2381,9 +2682,16 @@ function aiRecordRequestOutcome(requestId, outcome, attempts) {
 }
 function aiFailureHint(requestId) {
     var record = aiFailureRecords[String(requestId || '')];
-    if (!record || !aiIsTransientFailure(record.outcome)) return '';
-    return '模型接口暂时不可用（' + record.outcome + '）' +
-        (record.attempts > 0 ? '，已重试 ' + record.attempts + ' 次' : '，可在 LLM 设置中调高失败重试次数');
+    if (!record) return '';
+    if (aiIsTransientFailure(record.outcome)) {
+        return '模型接口暂时不可用（' + record.outcome + '）' +
+            (record.attempts > 0 ? '，已重试 ' + record.attempts + ' 次' : '，可在 LLM 设置中调高失败重试次数');
+    }
+    // 4xx 不会自愈，重试只会浪费时间：直接告诉用户该改配置的哪一栏。
+    // 前缀保留上游原文（record.outcome 里已带错误体摘要），便于用户对照服务商文档。
+    var advice = aiStatusAdvice(aiOutcomeStatus(record.outcome));
+    if (!advice) return '';
+    return record.outcome + '：' + advice;
 }
 function aiRequest(data, cfgOverride) {
     return new Promise(function (resolve) {
@@ -2435,6 +2743,9 @@ function aiRequest(data, cfgOverride) {
                     timeoutNote + cacheInfo, txt ? 'info' : 'warn');
                 aiRecordRequestOutcome(requestId, txt ? '' : outcome, attempt > 1 ? attempt - 1 : 0);
                 aiTrackRequestAttempts(requestId, attempt);
+                aiRememberLastOutcome(requestId, txt ? '' : outcome);
+                if (!txt) aiTrackAdviceStreak(outcome);
+                else { aiAdviceStreak.advice = ''; aiAdviceStreak.count = 0; }
                 if (!cfgOverride) {
                     try { aiStatAdd(!!txt, Date.now() - started, question, cacheHit, cacheMiss); } catch (e) {}
                 }
@@ -2531,7 +2842,9 @@ function aiRequest(data, cfgOverride) {
                     var status = Number(r && r.status) || 0;
                     if (status < 200 || status >= 300) {
                         var detail = aiHttpErrorDetail(r);
-                        console.warn('[AI] 请求返回 HTTP ' + status);
+                        // 失败原因必须同时进控制台：用户点开 F12 就能看到上游到底说了什么，
+                        // 而面板日志只留一句短提示，避免刷屏。
+                        console.warn('[AI] 请求返回 HTTP ' + status, detail || '(上游未返回错误说明)');
                         settle('', null, null, 'HTTP ' + status + (detail ? '（' + detail + '）' : ''));
                         return;
                     }
@@ -2650,7 +2963,8 @@ function aiListModels(cfg, done) {
                 try { payload = JSON.parse((r && r.responseText) || ""); } catch (e) { payload = null; }
                 if (status < 200 || status >= 300) {
                     var errorMsg = payload && payload.error && (payload.error.message || payload.error.msg);
-                    done({ ok: false, msg: "获取模型失败（HTTP " + status + "）" + (errorMsg ? "：" + errorMsg : "") });
+                    var listAdvice = aiStatusAdvice(status);
+                    done({ ok: false, msg: "获取模型失败（HTTP " + status + "）" + (errorMsg ? "：" + errorMsg : listAdvice ? "：" + listAdvice : "") });
                     return;
                 }
                 var rows = [];
@@ -2970,7 +3284,8 @@ function openAiSettingWindow(silent) {
                 if (res.ok) {
                     reply({ ok: true, msg: "连接成功（" + res.ms + "ms）\n模型返回：" + res.text });
                 } else {
-                    reply({ ok: false, msg: "连接失败：接口无有效返回（检查地址/Key/模型名/网络，以及油猴的 @connect 权限）" });
+                    var advice = aiLastFailureAdvice('配置测试');
+                    reply({ ok: false, msg: "连接失败：" + (advice || "接口无有效返回（检查地址/Key/模型名/网络，以及油猴的 @connect 权限）") });
                 }
             });
         }
@@ -5464,6 +5779,13 @@ var __XXT_DUP__ = (function () {
         if (desktopChapterAlertNote) return desktopChapterAlertNote;
         for (const target of desktopChapterSubmitWindows()) {
             try {
+                // antispider 拦截不一定弹 #verifyCodeWin：整页被 302 到验证页时
+                // 提交表单根本没发出去，之后每次重试都只会再被挡一次。
+                if (xxtRiskControlMark('', String(target.location && target.location.href || ''))) {
+                    return '平台要求输入验证码（风控），请完成验证后再提交';
+                }
+            } catch (error) {}
+            try {
                 const verify = target.document.getElementById('verifyCodeWin');
                 if (verify && verify.style && verify.style.display === 'block') {
                     return '平台要求输入提交验证码，请手动完成验证后再提交';
@@ -5563,6 +5885,9 @@ var __XXT_DUP__ = (function () {
                     // validate 的 status==1 只会 alert「账号发生异常」再返回，不会回调 toadd，
                     // 确认框因此永远不会出现；把它记下来，收尾时如实告诉用户卡在哪一步。
                     if (/账号发生异常|请刷新页面后重试/.test(text)) desktopChapterAlertNote = text;
+                    // 风控验证提示走的是 alert 通道时（【9010】操作异常…），
+                    // 光看 #verifyCodeWin 是看不到的，必须也记成拦截原因。
+                    if (xxtRiskControlMark(text)) desktopChapterAlertNote = '平台要求输入验证码（风控），请完成验证后再提交';
                     // 先让协调层处理（回退提交锁 / 记已批阅），再独立判断要不要上报：
                     // 两者返回值无关，回退提交锁成功不代表用户已经知道这次没交上去。
                     const handled = aiObserveChapterAlert(_self, '', message);
@@ -5634,6 +5959,11 @@ var __XXT_DUP__ = (function () {
         const autoSave = String(setting('unrivalAutoSave', GM_getValue('unrivalautosave', '1'))) === '1';
         // 两项同时开启时一律提交优先：保存会弹平台提示并可能刷新页面，导致整章重新作答。
         const allowSave = autoSave && !autoSubmit;
+        // 保存前先随机等一小会儿：答完最后一题立刻保存，这个时序本身也是特征。
+        const saveWithDelay = async () => {
+            await sleep(saveDelayMs(2000));
+            return Promise.resolve(_self.noSubmit());
+        };
         // 上一次提交被平台拒绝时，「沿用页面已有答案」不算作答结果：
         // 页面上那一份很可能就是被拒的旧答案，直接沿用等于拿同一份答案再被拒一次。
         const reusedInvalid = reusedCount() > 0 && aiChapterSubmitFailed(_self, '');
@@ -5649,7 +5979,7 @@ var __XXT_DUP__ = (function () {
             const failedText = failed.length ? aiClip('未通过 ' + failed.length + ' 题：' + failed.join('；'), 180) : '';
             if (total > 0 && allowSave && typeof _self.noSubmit === 'function') {
                 try {
-                    await Promise.resolve(_self.noSubmit());
+                    await saveWithDelay();
                     report('有题目未完成或选中状态已变化，已发起保存，请检查后手动提交' + (failedText ? '（' + failedText + '）' : ''));
                 } catch (error) {
                     console.error('[chapter save]', error);
@@ -5666,7 +5996,7 @@ var __XXT_DUP__ = (function () {
             if (autoSubmit) {
                 if (typeof _self.btnBlueSubmit !== 'function') {
                     if (allowSave && typeof _self.noSubmit === 'function') {
-                        await Promise.resolve(_self.noSubmit());
+                        await saveWithDelay();
                         report('平台提交函数未就绪，已发起保存，请手动检查并提交');
                     } else {
                         report('平台提交函数未就绪，请手动检查并提交');
@@ -5674,7 +6004,7 @@ var __XXT_DUP__ = (function () {
                     return 'handled';
                 }
                 report('作答覆盖率 100%' + reusedText() + '，页面选项已核验，准备提交');
-                await sleep(2000);
+                await sleep(saveDelayMs(2000));
                 // 手机章节页可能还在跑 AI 请求：共享注册表里只要还有 pending，就说明这一章
                 // 还没答完，抢在它前面提交等于把「答了一半」的卷子交上去，平台会回
                 // 「无效的参数：code-1！」并刷新整页，整章白跑。
@@ -5719,7 +6049,7 @@ var __XXT_DUP__ = (function () {
                     report('平台保存函数未就绪，请手动保存答案');
                     return 'handled';
                 }
-                await Promise.resolve(_self.noSubmit());
+                await saveWithDelay();
                 report('已发起答案保存，请确认平台提示');
             } else {
                 report('作答覆盖率 100%' + reusedText() + '，请检查后手动保存或提交');
@@ -6172,7 +6502,7 @@ var __XXT_DUP__ = (function () {
                 // 暂停期间保持原来的慢节奏，避免 120ms 空转。
                 const noAiNeeded = !GLOBAL.stop && (pendingItem ? (aiSkipAnswered() && isDomQuestionAnswered(pendingItem)) : lastIterationSkipped);
                 if (pendingItem && !GLOBAL.stop) lastIterationSkipped = noAiNeeded;
-                await sleep(noAiNeeded ? AI_SKIP_ANSWERED_DELAY_MS : questionIntervalSeconds() * 1e3);
+                await sleep(noAiNeeded ? AI_SKIP_ANSWERED_DELAY_MS : answerIntervalMs());
                 if (GLOBAL.stop) {
                     continue;
                 }
@@ -6193,7 +6523,7 @@ var __XXT_DUP__ = (function () {
                                 type: "hidden",
                                 tip: "自动答题已完成,请检查提交"
                             });
-                        }, questionIntervalSeconds() * 1e3);
+                        }, answerIntervalMs());
                     } else if (auto_jump) {
                         iframeMsg("tip", { tip: "有题目未通过解析或页面选中校验，请检查后手动继续" });
                     } else {
@@ -6248,7 +6578,8 @@ var __XXT_DUP__ = (function () {
                     const idInput = itemRoot.querySelector('input[name^="answer"],input[name^="questionId"],input[name^="questionid"]');
                     const questionKey = data.questionid || data.id || (idInput && (idInput.getAttribute('name') || idInput.id).replace(/^answer(?:check)?/, '')) || null;
                     const chapterWorkId = select.name === '超星章节测验' ? aiChapterWorkId(itemRoot.ownerDocument.defaultView || _self, '') : '';
-                    const request = aiBeginQuestion(itemRoot, questionKey, select.name || "WorkerJS", questionSignature, chapterWorkId, GLOBAL.index);
+                    const cacheContext = aiAnswerCacheContext(chapterWorkId, questionKey, data.type, data.question, data.options);
+                    const request = aiBeginQuestion(itemRoot, questionKey, select.name || "WorkerJS", questionSignature, chapterWorkId, GLOBAL.index, cacheContext);
                     if (!request) {
                         noteFailure(GLOBAL.index, '该题已有处理请求，本次跳过');
                         aiTrace('题目 #' + GLOBAL.index + '（' + aiSourceName(select.name || "WorkerJS") + '）已有处理请求，本次跳过（重复请求已拦截）', 'warn', _self);
@@ -6263,7 +6594,27 @@ var __XXT_DUP__ = (function () {
                     iframeMsg("tip", {
                         tip: "准备答第" + GLOBAL.index + "题"
                     });
-                    const formatResult = await formatSearchAnswer(data);
+                    const cachedAnswers = aiGetCrossPageAnswer(_self, cacheContext);
+                    const formatResult = cachedAnswers ? {
+                        success: true,
+                        msg: '复用另一页面已核验答案',
+                        num: 0,
+                        list: [cachedAnswers]
+                    } : await formatSearchAnswer(data);
+                    if (!cachedAnswers && !formatResult.success) {
+                        const recoveredAnswers = await aiWaitCrossPageAnswer(_self, cacheContext, 5000);
+                        if (recoveredAnswers) {
+                            formatResult.success = true;
+                            formatResult.msg = '复用另一页面已核验答案';
+                            formatResult.list = [recoveredAnswers];
+                            aiTrace('题目 #' + GLOBAL.index + '（' + aiSourceName(select.name || "WorkerJS") +
+                                '）请求失败后复用另一页面已核验答案', 'info', _self);
+                        }
+                    }
+                    if (cachedAnswers) {
+                        aiTrace('题目 #' + GLOBAL.index + '（' + aiSourceName(select.name || "WorkerJS") +
+                            '）复用另一页面已核验答案，跳过重复 AI 请求', 'info', _self);
+                    }
                     if (formatResult.success && request.isCurrent()) {
                         iframeMsg("tip", {
                             tip: "准备填充 AI 答案"
@@ -6284,6 +6635,7 @@ var __XXT_DUP__ = (function () {
                             style: r.style
                         });
                         if (success) {
+                            aiRememberCrossPageAnswer(_self, cacheContext, formatResult.list[0]);
                             // 按下标存放而不是 push：aiAllQuestionsVerified 要求 results.length === total，
                             // 只有按下标填充，稀疏数组的 length 才等于总题数，收尾才能正确判出漏答题。
                             verifiedResults[GLOBAL.index - 1] = { success: true, request: request, verify: r.verify };
@@ -7179,6 +7531,29 @@ function xxtFindStudyConflict(sessions, selfId, courseId, now, ttl) {
     return conflict;
 }
 
+// 超星风控（antispider）会把业务请求 302 到 /antispiderShowVerify.ac，
+// 回包里是一张要求输入图片验证码的页面，不是业务数据。
+// 请求层必须能认出这种回包：否则 JSON.parse 失败会被当成「接口错误」「任务未完成」，
+// 任务被判定为失败且不可回退，整章学习直接停摆，用户还不知道要去输入验证码。
+function xxtRiskControlMark(body, url, headers) {
+    var text = String(body == null ? '' : body);
+    var where = String(url == null ? '' : url) + ' ' + String(headers == null ? '' : headers);
+    // 优先嗅探特征串而不是依赖 finalUrl / responseHeaders：
+    // 各脚本管理器对 302 后原始地址的回传并不一致，特征串在所有实现上都拿得到。
+    // 地址侧一并纳入判定，是因为有些拦截页的正文可能是空的，只剩跳转目标可认。
+    if (/antispiderShowVerify|processVerifyPng|processVerify\.ac/i.test(where)) return 'antispider';
+    if (/antispiderShowVerify|processVerifyPng|processVerify\.ac/i.test(text)) return 'antispider';
+    if (text.indexOf('【9010】') >= 0) return 'antispider';
+    if (text.indexOf('请输入图片中的验证码') >= 0) return 'antispider';
+    return '';
+}
+
+// 验证页地址：脚本给出的链接必须是真正能解验证的页面，
+// 早期版本把上报接口当成 href，用户点开只看得到一段 JSON。
+function xxtRiskControlUrl(protocol, host) {
+    return String(protocol || 'https:') + '//' + String(host || '') + '/antispiderShowVerify.ac';
+}
+
 function xxtFormatPlaybackTime(seconds) {
     var value = Math.max(0, Math.floor(Number(seconds) || 0));
     var hours = Math.floor(value / 3600);
@@ -7720,6 +8095,12 @@ function xxtObserveNativeVideoProgress(sourceWindow) {
                             _w.top.unrivalAutoSave = '0';
                         }
                     }
+                    var riskResumeButton = _d.getElementById('riskControlResumeButton');
+                    if (riskResumeButton) {
+                        riskResumeButton.onclick = function () {
+                            xxtRiskControlLeave();
+                        };
+                    }
                     _d.getElementById('videoTimeButton').onclick = function () {
                         if (_w.xxtShowTab) {
                             _w.xxtShowTab('course');
@@ -7751,6 +8132,73 @@ function xxtObserveNativeVideoProgress(sourceWindow) {
             loopJobRunning = false,
             loopJobEnded = false,
             multiScriptWarned = false,
+            // —— 风控（antispider）暂停 / 恢复 ——
+            // 超星把人机验证记在服务端会话上，脚本不可能替用户输入；
+            // 但若把它当成「任务失败」，任务状态会进入 failed 终态，
+            // 用户验证完也接不回去，只能整章重来。所以这里只停派发、不动任务状态。
+            riskControl = {
+                active: false,
+                scene: '',
+                url: '',
+                since: 0,
+                logged: false,
+                retry: []
+            },
+            xxtRiskControlSyncUi = () => {
+                var bar = _d.getElementById('riskControlBar');
+                if (!bar) return;
+                if (!riskControl.active) {
+                    bar.style.display = 'none';
+                    return;
+                }
+                bar.style.display = 'block';
+                var waitingSeconds = Math.max(0, Math.round((Date.now() - riskControl.since) / 1000));
+                var text = _d.getElementById('riskControlText');
+                if (text) {
+                    text.textContent = '平台要求输入验证码（风控），任务已暂停 ' +
+                        xxtFormatPlaybackTime(waitingSeconds) + '。完成验证后点「已验证，继续」';
+                }
+                var link = _d.getElementById('riskControlVerifyButton');
+                if (link) link.setAttribute('href', riskControl.url || xxtRiskControlUrl(_p, _h));
+            },
+            xxtRiskControlEnter = (scene, retry) => {
+                if (typeof retry === 'function') riskControl.retry.push(retry);
+                riskControl.active = true;
+                riskControl.scene = String(scene || '');
+                riskControl.url = xxtRiskControlUrl(_p, _h);
+                riskControl.since = Date.now();
+                if (!riskControl.logged) {
+                    riskControl.logged = true;
+                    logs.addLog('平台要求输入验证码（风控），学习任务已暂停：点上方「去验证」在打开的页面里完成验证，' +
+                        '再点「已验证，继续」即可自动接着学', 'red');
+                    if (typeof _w.xxtShowTab === 'function') {
+                        try { _w.xxtShowTab('log'); } catch (error) {}
+                    }
+                }
+                xxtRiskControlSyncUi();
+                scheduleLoopJob(3000);
+            },
+            xxtRiskControlLeave = () => {
+                if (!riskControl.active) return;
+                var retryList = riskControl.retry.splice(0, riskControl.retry.length);
+                riskControl.active = false;
+                riskControl.scene = '';
+                riskControl.logged = false;
+                xxtRiskControlSyncUi();
+                if (loopJobTimer !== null) {
+                    clearTimeout(loopJobTimer);
+                    loopJobTimer = null;
+                }
+                logs.addLog('已恢复运行，正在重新发起被风控打断的任务', 'green');
+                for (var retryIndex = 0; retryIndex < retryList.length; retryIndex++) {
+                    try {
+                        retryList[retryIndex]();
+                    } catch (error) {
+                        console.warn('[risk control resume]', error);
+                    }
+                }
+                scheduleLoopJob(500);
+            },
             scheduleLoopJob = delay => {
                 if (loopJobTimer !== null || loopJobEnded || stop) return;
                 loopJobTimer = setTimeout(() => {
@@ -7766,6 +8214,13 @@ function xxtObserveNativeVideoProgress(sourceWindow) {
             loopjob = () => {
                 drainAiTrace();
                 if (loopJobEnded || stop) return;
+                if (riskControl.active) {
+                    // 风控期间只保留心跳：不派发新任务、不改任务状态、不判定失败。
+                    // 用户在这些任务上其实什么都没做错，验证完必须能原地接上。
+                    xxtRiskControlSyncUi();
+                    scheduleLoopJob(3000);
+                    return;
+                }
                 if (loopJobRunning) {
                     scheduleLoopJob(500);
                     return;
@@ -7952,6 +8407,13 @@ function xxtObserveNativeVideoProgress(sourceWindow) {
                     readyFinished = true;
                     clearTimeout(readyTimeout);
                     releaseReady();
+                    if (xxtRiskControlMark(res && res.responseText, res && res.finalUrl || statusUrl)) {
+                        // 风控回包是验证页 HTML，不是视频信息；当成「解析失败」会把任务判死，
+                        // 用户验证完也接不回来。这里放开去重标记，验证后原地重拉。
+                        videoReadyRequests.delete(readyKey);
+                        xxtRiskControlEnter('video-ready', function () { video_getReady(item); });
+                        return;
+                    }
                     try {
                         let videoInfo = JSON.parse(res.responseText),
                             duration = videoInfo['duration'],
@@ -8043,6 +8505,11 @@ function xxtObserveNativeVideoProgress(sourceWindow) {
                     times = 0,
                     first = true,
                     loop = setInterval(function () {
+                        if (riskControl.active) {
+                            // 风控暂停期间既不推进也不上报：进度原地冻结，
+                            // 恢复后从同一处续报，不会出现「一秒跳过几分钟」的假进度被平台清掉。
+                            return;
+                        }
                         if (rate <= 0) {
                             clearInterval(loop);
                             logs.addLog('倍速设置为0，视频已自动跳过', 'orange');
@@ -8195,22 +8662,12 @@ function xxtObserveNativeVideoProgress(sourceWindow) {
                                         } catch (e) {
                                             releaseBusy();
                                             console.log(e);
-                                            if (res.responseText.indexOf('验证码') >=
-                                                0) {
-                                                // reportsUrl 由页面数据拼成，作为 href 属性值必须转义，
-                                                // 否则其中的引号会截断属性；此处保留富文本以维持可点击链接。
-                                                logs.addLog('已被超星风控，请<a href="' +
-                                                    escapeLogHtml(reportsUrl) +
-                                                    '" target="_blank">点我处理</a>，60秒后自动刷新页面',
-                                                    'red', true);
-                                                missionList['m' + item['jobid']][
-                                                    'running'
-                                                ] = false;
-                                                clearInterval(loop);
-                                                stop = true;
-                                                setTimeout(function () {
-                                                    _l.reload();
-                                                }, 60000);
+                                            if (xxtRiskControlMark(res && res.responseText,
+                                                res && res.finalUrl || reportsUrl)) {
+                                                // 进度上报被挡：视频仍在本地播放，这里只暂停上报。
+                                                // 定时器保留，验证完成后下个周期自动续报，
+                                                // 不必从头重播，也不会让进度倒退。
+                                                xxtRiskControlEnter('video-progress');
                                                 return;
                                             }
                                             logs.addLog('超星返回错误信息，十秒后重试，请重新登录或重新打开浏览器', 'red');
@@ -8271,6 +8728,15 @@ function xxtObserveNativeVideoProgress(sourceWindow) {
                             classId + '&jtoken=' + item['jtoken'],
                         onload: function (res) {
                             if (requestFinished) return;
+                            if (xxtRiskControlMark(res && res.responseText, res && res.finalUrl)) {
+                                // 验证页 HTML 会被 JSON.parse 抛错，进而把文档任务判成失败；
+                                // 实际只是要求人工验证，暂停后重试即可。
+                                requestFinished = true;
+                                busyThread = Math.max(0, busyThread - 1);
+                                missionList['m' + item['jobid']].running = false;
+                                xxtRiskControlEnter('document', function () { doDocument(item); });
+                                return;
+                            }
                             try {
                                 let ispass = JSON.parse(res.responseText);
                                 if (ispass['status']) {
@@ -8428,6 +8894,14 @@ function xxtObserveNativeVideoProgress(sourceWindow) {
                             url: url,
                             onload: function (res) {
                                 if (settled) return;
+                                if (xxtRiskControlMark(res && res.responseText, res && res.finalUrl || url)) {
+                                    // 图书/链接/速课都是靠回包文本判成功的，验证页 HTML 里没有成功标识，
+                                    // 直接判失败会让任务进入终态、验证完也接不回来。
+                                    settled = true;
+                                    mission.running = false;
+                                    xxtRiskControlEnter(label, function () { doAnanasTask(item, spec, label); });
+                                    return;
+                                }
                                 if (xxtAnanasSucceeded(spec, res && res.responseText)) {
                                     settle('done', label + '任务已完成：' + item['name'], 'green');
                                 } else {
@@ -8484,6 +8958,13 @@ function xxtObserveNativeVideoProgress(sourceWindow) {
                     ]),
                     onload: function (res) {
                         if (settled) return;
+                        if (xxtRiskControlMark(res && res.responseText, res && res.finalUrl)) {
+                            // 直播详情也走风控；判失败同样会让任务进终态，验证后接不回来。
+                            settled = true;
+                            mission.running = false;
+                            xxtRiskControlEnter('live', function () { doLive(item); });
+                            return;
+                        }
                         var detail;
                         try {
                             var info = JSON.parse(res.responseText);
@@ -8539,6 +9020,16 @@ function xxtObserveNativeVideoProgress(sourceWindow) {
                                 url: reportUrl,
                                 onload: function (report) {
                                     if (settled) return;
+                                    if (xxtRiskControlMark(report && report.responseText, report && report.finalUrl || reportUrl)) {
+                                        // 进度上报被风控挡下：短视频里只要有一条进度没记上，
+                                        // 这次观看就白播了。停在这里等用户验证，再从当前进度续报。
+                                        if (timer !== null) clearInterval(timer);
+                                        timer = null;
+                                        settled = true;
+                                        mission.running = false;
+                                        xxtRiskControlEnter('live-progress', function () { doLive(item); });
+                                        return;
+                                    }
                                     if (String(report && report.responseText).indexOf('success') < 0) {
                                         reportFailure('直播进度上报失败');
                                         return;
@@ -9133,7 +9624,8 @@ function xxtObserveNativeVideoProgress(sourceWindow) {
                 return { success: false, reason: typeof aiDisabledHint === 'function' ? aiDisabledHint() : 'LLM 未启用或未配置' };
             }
             const signature = () => question.fingerprint();
-            const request = aiBeginQuestion(question.element, question.id, question.source, signature, question.workId, question.index + 1);
+            const cacheContext = aiAnswerCacheContext(question.workId, question.id, question.typeCode, question.question, question.options);
+            const request = aiBeginQuestion(question.element, question.id, question.source, signature, question.workId, question.index + 1, cacheContext);
             if (!request) {
                 aiTrace('题目 #' + (question.index + 1) + '（手机章节页）未作答：该题已有处理请求或章节已进入提交状态（重复请求已拦截）', 'warn', _w);
                 return { success: false, reason: '该题已有处理请求（另一流程正在处理）' };
@@ -9143,8 +9635,12 @@ function xxtObserveNativeVideoProgress(sourceWindow) {
             try {
             const type = question.typeCode;
             const modelOptions = question.options.map(option => option.text || (option.value === 'true' ? '正确' : option.value === 'false' ? '错误' : ''));
-            const answers = await aiModelAnswer({ question: question.question, options: modelOptions, type: type,
+            const cachedAnswers = aiGetCrossPageAnswer(_w, cacheContext);
+            const answers = cachedAnswers || await aiModelAnswer({ question: question.question, options: modelOptions, type: type,
                 requestMeta: { requestId: request.id, questionId: request.key, source: request.source } });
+            if (cachedAnswers) {
+                aiTrace('题目 #' + (question.index + 1) + '（手机章节页）复用另一页面已核验答案，跳过重复 AI 请求', 'info', _w);
+            }
             if (!request.isCurrent()) {
                 request.finish(false, 'stale-question');
                 return { success: false, reason: '题目已切换，已丢弃过期答案' };
@@ -9190,6 +9686,7 @@ function xxtObserveNativeVideoProgress(sourceWindow) {
                 return { success: false, reason: '最终选中状态与答案不一致' };
             }
             if (!request.finish(true, 'selection-verified')) return { success: false, reason: '题目已切换，已丢弃过期答案' };
+            aiRememberCrossPageAnswer(_w, cacheContext, answers);
             return { success: true, verify: verify, indexes: selection.indexes };
             } catch (error) {
                 request.finish(false, 'processing-error');
@@ -9282,7 +9779,7 @@ function xxtObserveNativeVideoProgress(sourceWindow) {
                         _w.top.unrivalWorkInfo = '自动提交流程发生异常，请手动检查平台状态';
                         _phonePanelTip(_w.top.unrivalWorkInfo, 'hidden');
                     }
-                }, parseInt(Math.random() * 2000 + 3000, 10));
+                }, saveDelayMs(parseInt(Math.random() * 2000 + 3000, 10)));
             } else if (autoSaveOnly) {
                 const transient = _phoneResults.filter(result => result && !result.success && aiIsTransientFailure(result.reason)).length;
                 _w.top.unrivalWorkInfo = '作答覆盖率 ' + coverage + '%，' + (allVerified ? '自动提交未开启' : '存在未处理或未核验题目') + '，正在保存答案' +
@@ -9323,7 +9820,7 @@ function xxtObserveNativeVideoProgress(sourceWindow) {
                         _w.top.unrivalWorkInfo = '答案保存流程发生异常，请手动检查保存状态';
                         _phonePanelTip(_w.top.unrivalWorkInfo, 'hidden');
                     }
-                }, 2000);
+                }, saveDelayMs(2000));
             } else {
                 const failed = _phoneFailSummary();
                 const failedText = failed.length ? aiClip('未完成 ' + failed.length + ' 题：' + failed.join('；'), 160) : '';

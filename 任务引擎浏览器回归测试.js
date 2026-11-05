@@ -17,7 +17,12 @@ function extract(from, to) {
 // 但 aiBeginQuestion / aiRequest 都依赖它们，切片必须从它们开始。
 const helpers = extract('function aiTypeName(type)', 'function aiGetByPath(obj, path)');
 const transient = extract('function aiIsTransientFailure(reason)', 'function aiRetryDelay(attempt)');
-const panelMessage = extract('function aiPanelMessage(', 'var GLOBAL =');
+// aiObserveChapterAlert 会调用 xxtRiskControlMark 判定风控回包，但该函数定义在脚本末尾，
+// 落在 aiPanelMessage 的切片之外，必须显式带上，否则章节提交弹窗的判定会抛 ReferenceError。
+const riskControl = extract('function xxtRiskControlMark(', 'function xxtRiskControlUrl(');
+const panelMessage = extract('function aiPanelMessage(', 'var GLOBAL =') + riskControl;
+// 逐题与保存的随机浮动辅助函数：章节收尾与手机题页都会调用，切片执行时必须一并注入。
+const pacing = extract('// 固定节奏本身也是特征', '// 「跳过已作答」不调用 AI');
 const uiModule = extract('var XXT_UI = (function () {', '// ==================== UI 模块结束');
 const aiSettings = extract('function aiSettingHost()', '// ==================== 第三方 AI 模块结束');
 const aiBackup = extract('function aiBackupKeys()', 'function aiCfgSnapshot(cfg)');
@@ -185,7 +190,7 @@ async function mountPhone(browser, html, config = {}) {
     const page = await browser.newPage();
     await page.clock.install();
     await page.setContent(html);
-    await page.addScriptTag({ content: panelMessage + helpers + transient });
+    await page.addScriptTag({ content: panelMessage + helpers + transient + pacing });
     await page.evaluate(({ config, trim, phone }) => {
         window._w = window;
         window._d = document;
@@ -472,7 +477,7 @@ async function runDesktopChapter(browser) {
         await page.addScriptTag({ content: panelMessage + helpers + extract('    function isTrue(str)', '    function HTMLDecode(text)') +
             extract('    function isDomQuestionAnswered(', '    function createContainer(') +
             extract('    function desktopChapterOptions(', '    function desktopChapterVerified(') +
-            extract('    function desktopChapterVerified(', '    AI_STATUS_HOOKS.push(') });
+            extract('    function desktopChapterVerified(', '    AI_STATUS_HOOKS.push(') + pacing });
         const result = await page.evaluate(async () => {
             window.GLOBAL = { fillAnswerDelay: 0 };
             window.sleep = () => Promise.resolve();
@@ -585,7 +590,7 @@ async function runDesktopChapterSkipAccounting(browser) {
         await page.addScriptTag({ content: panelMessage + helpers + extract('    function isTrue(str)', '    function HTMLDecode(text)') +
             extract('    function isDomQuestionAnswered(', '    function createContainer(') +
             extract('    function desktopChapterOptions(', '    function desktopChapterVerified(') +
-            extract('    function desktopChapterVerified(', '    AI_STATUS_HOOKS.push(') });
+            extract('    function desktopChapterVerified(', '    AI_STATUS_HOOKS.push(') + pacing });
         const result = await page.evaluate(async () => {
             window._self = window;
             window.iframeMsg = () => {};
@@ -659,7 +664,7 @@ async function runDesktopChapterWrapper(browser) {
         await page.addScriptTag({ content: panelMessage + helpers + extract('    function isTrue(str)', '    function HTMLDecode(text)') +
             extract('    function isDomQuestionAnswered(', '    function createContainer(') +
             extract('    function desktopChapterOptions(', '    function desktopChapterVerified(') +
-            extract('    function desktopChapterVerified(', '    AI_STATUS_HOOKS.push(') });
+            extract('    function desktopChapterVerified(', '    AI_STATUS_HOOKS.push(') + pacing });
         const result = await page.evaluate(async () => {
             window.GLOBAL = { fillAnswerDelay: 0 };
             window.sleep = () => Promise.resolve();

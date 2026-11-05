@@ -25,7 +25,16 @@ assert.ok(videoProgressEnd > videoProgressStart, 'video progress helper extracti
 assert.notEqual(panelMessageStart, -1, 'exam panel message bridge must exist in the userscript');
 assert.ok(panelMessageEnd > panelMessageStart, 'exam panel message bridge extraction boundary must exist');
 
-const context = vm.createContext({ console, Promise, WeakMap, Map, Set, aiTrace: () => {} });
+const cacheStart = script.indexOf('var AI_CROSS_PAGE_ANSWER_TTL_MS');
+const cacheEnd = script.indexOf('// 判断两条请求记录是否指向同一道题。', cacheStart);
+assert.notEqual(cacheStart, -1, 'cross-page answer cache must exist in the userscript');
+assert.ok(cacheEnd > cacheStart, 'cross-page answer cache must have a boundary');
+const context = vm.createContext({ console, Promise, WeakMap, Map, Set, Date, aiTrace: () => {} });
+vm.runInContext(`
+function aiChapterSubmitHost(sourceWindow) { return sourceWindow; }
+${script.slice(cacheStart, cacheEnd)}
+globalThis.cacheApi = { context: aiAnswerCacheContext, get: aiGetCrossPageAnswer, remember: aiRememberCrossPageAnswer };
+`, context);
 vm.runInContext(formatHelpers + script.slice(start, end) + `
 globalThis.api = {
     parse: function (text, data) { data.options = Array.from(data.options || []); return Array.from(aiParseAnswer(text, data)); },
@@ -46,6 +55,76 @@ const api = context.api;
 const parse = (text, data) => Array.from(api.parse(text, data));
 const map = (answers, options) => Array.from(api.map(answers, options));
 const toggle = (node, isSelected) => api.toggle(node, isSelected);
+
+const cacheWindow = {};
+const cacheContext = (workId, questionId, type, question, options) =>
+    context.cacheApi.context(workId, questionId, type, question, options);
+
+test('cross-page answer cache requires matching work, question, and option fingerprints', () => {
+    const options = [
+        { value: 'A', text: '1' }, { value: 'B', text: '5' }, { value: 'C', text: '2' }, { value: 'D', text: '3' }
+    ];
+    const original = cacheContext('work-a', 'q-1', 0, 'Z6 的可逆元是？', options);
+    context.cacheApi.remember(cacheWindow, original, ['B']);
+    assert.deepEqual(Array.from(context.cacheApi.get(cacheWindow, original)), ['B']);
+    assert.equal(context.cacheApi.get(cacheWindow, cacheContext('work-b', 'q-1', 0, 'Z6 的可逆元是？', options)), null);
+    assert.equal(context.cacheApi.get(cacheWindow, cacheContext('work-a', 'q-1', 0, 'Z8 的零因子有？', options)), null);
+    assert.equal(context.cacheApi.get(cacheWindow, cacheContext('work-a', 'q-1', 0, 'Z6 的可逆元是？', [
+        { value: 'A', text: '1' }, { value: 'B', text: '5' }, { value: 'C', text: '3' }, { value: 'D', text: '2' }
+    ])), null);
+});
+
+test('cross-page answer cache shares text-only and platform-value option representations', () => {
+    const desktop = cacheContext('work-a', 'q-2', 3, '题目', ['正确', '错误']);
+    const phone = cacheContext('work-a', 'q-2', 3, '题目', [{ value: 'true', text: '正确' }, { value: 'false', text: '错误' }]);
+    context.cacheApi.remember(cacheWindow, phone, ['A']);
+    assert.deepEqual(Array.from(context.cacheApi.get(cacheWindow, desktop)), ['A']);
+    assert.equal(context.cacheApi.get(cacheWindow, cacheContext('work-a', 'q-2', 0, '题目', ['正确', '错误'])), null);
+    assert.equal(context.cacheApi.get(cacheWindow, cacheContext('work-a', 'q-2', 3, '题目', ['错误', '正确'])), null);
+});
+
+test('cross-page answer cache sweeps every expired entry instead of only the looked-up key', () => {
+    // 缓存挂在顶层窗口上、跨章节共用。以前只在「查到的那一条过期」时删，
+    // 长会话里每答一题就多一条永不回收的记录。
+    const window = {};
+    const options = [{ value: 'A', text: '1' }, { value: 'B', text: '2' }];
+    const at = (id, question) => cacheContext('work-sweep', id, 0, question, options);
+    context.cacheApi.remember(window, at('q1', '一'), ['A']);
+    context.cacheApi.remember(window, at('q2', '二'), ['B']);
+    context.cacheApi.remember(window, at('q3', '三'), ['A']);
+    const cache = window.__xxtCrossPageAnswers;
+    assert.equal(cache.size, 3);
+    // 把前两条拨成 10 分钟 TTL 之外，第三条保持新鲜。Map 保持插入顺序，按位置取即可。
+    const stale = Date.now() - (11 * 60 * 1000);
+    const records = Array.from(cache.values());
+    records[0].time = stale;
+    records[1].time = stale;
+    context.cacheApi.remember(window, at('q4', '四'), ['B']);
+    assert.equal(cache.size, 2, 'both expired entries must be swept by a single write');
+    assert.deepEqual(Array.from(context.cacheApi.get(window, at('q3', '三'))), ['A'], 'a live entry must stay usable');
+    assert.deepEqual(Array.from(context.cacheApi.get(window, at('q4', '四'))), ['B']);
+});
+
+test('cross-page answer lookup throttles the sweep but writes always reclaim', () => {
+    // aiWaitCrossPageAnswer 每 250ms 轮询一次 miss。如果每次 miss 都全表扫，
+    // 一次 60 秒的等待要白扫两百多遍；写入路径必须强制扫，读取路径节流即可。
+    const window = {};
+    const options = [{ value: 'A', text: '1' }, { value: 'B', text: '2' }];
+    const at = (id, question) => cacheContext('work-throttle', id, 0, question, options);
+    context.cacheApi.remember(window, at('q1', '一'), ['A']);
+    context.cacheApi.remember(window, at('q2', '二'), ['B']);
+    const cache = window.__xxtCrossPageAnswers;
+    assert.equal(cache.size, 2);
+    // 写入刚做过强制清扫，此时把 q1 拨成过期：紧接着的 miss 只欠一次读取，
+    // 不应立刻全表扫（否则 250ms 轮询会把它变成热点）。
+    Array.from(cache.values())[0].time = Date.now() - (11 * 60 * 1000);
+    assert.equal(context.cacheApi.get(window, at('ghost', '幽灵')), null, 'a miss still returns null');
+    assert.equal(cache.size, 2, 'a lookup right after a write must not re-scan the whole cache');
+    context.cacheApi.remember(window, at('q3', '三'), ['A']);
+    assert.equal(cache.size, 2, 'a write must force the sweep and drop the expired entry');
+    assert.deepEqual(Array.from(context.cacheApi.get(window, at('q2', '二'))), ['B']);
+    assert.deepEqual(Array.from(context.cacheApi.get(window, at('q3', '三'))), ['A']);
+});
 
 test('question model normalizes stable option identity and validates judgment choices', () => {
     const question = api.createQuestion({
@@ -356,6 +435,59 @@ test('transient AI failures surface a retry hint for later questions, other fail
     assert.equal(requestContext.aiFailureHint('q-2'), '');
 });
 
+test('http 4xx failures explain which setting to fix instead of staying silent', async () => {
+    const requestSource = script.slice(script.indexOf('function aiIsRetryableOutcome'), script.indexOf('function aiModelAnswer(data)'));
+    const requests = [];
+    const timers = new Map();
+    let timerId = 0;
+    const requestContext = vm.createContext({
+        Promise, Date, Math, isFinite, Object, JSON, String, Array, Number,
+        console: { warn: () => {}, log: () => {} },
+        aiTrace: () => {},
+        setTimeout: (callback, delay) => { timers.set(++timerId, { callback, delay }); return timerId; },
+        clearTimeout: id => { timers.delete(id); },
+        aiEndpoint: () => 'https://fixture.test/v1/chat/completions',
+        aiJsonParse: () => null,
+        aiExtractText: () => '',
+        aiBuildMessages: () => [],
+        GM_xmlhttpRequest: options => { requests.push(options); return { abort: () => {} }; }
+    });
+    vm.runInContext(formatHelpers + requestSource, requestContext);
+    const config = { url: 'https://fixture.test', timeout: 3000, model: 'fixture', temperature: 0, maxTokens: 10, retries: 2 };
+
+    const unauthorized = requestContext.aiRequest({ question: 'a', requestMeta: { requestId: 'k-401' } }, config);
+    requests[0].onload({ status: 401, responseText: '{"error":{"message":"invalid api key"}}' });
+    assert.equal(await unauthorized, '');
+    const keyHint = requestContext.aiFailureHint('k-401');
+    assert.match(keyHint, /HTTP 401/);
+    assert.match(keyHint, /API Key/, 'a bad key must point at the key field');
+    assert.match(keyHint, /invalid api key/, 'the upstream message must stay visible');
+
+    const broke = requestContext.aiRequest({ question: 'b', requestMeta: { requestId: 'k-402' } }, config);
+    requests[1].onload({ status: 402, responseText: '' });
+    assert.equal(await broke, '');
+    assert.match(requestContext.aiFailureHint('k-402'), /额度/, 'an empty 402 body still has to name the quota problem');
+
+    const missing = requestContext.aiRequest({ question: 'c', requestMeta: { requestId: 'k-404' } }, config);
+    requests[2].onload({ status: 404, responseText: '' });
+    assert.equal(await missing, '');
+    assert.match(requestContext.aiFailureHint('k-404'), /接口地址或模型名/);
+
+    assert.equal(requestContext.aiStatusAdvice(418), '', 'an unmapped status must not invent advice');
+    assert.equal(requestContext.aiFailureHint('never-used'), '');
+
+    // 设置面板的「测试连接」不带 requestMeta，走的是 requestId = 配置测试 的分支，
+    // 它被 aiRecordRequestOutcome 排除，必须靠 aiLastOutcomes 才能把状态码带回面板。
+    const probe = requestContext.aiRequest({ question: '请只回复 OK', options: [], type: 4 }, config);
+    requests[3].onload({ status: 401, responseText: '{"error":{"message":"invalid api key"}}' });
+    assert.equal(await probe, '');
+    assert.match(requestContext.aiLastFailureAdvice('配置测试'), /HTTP 401 · API Key/);
+    const probeOk = requestContext.aiRequest({ question: '请只回复 OK', options: [], type: 4 }, config);
+    requests[4].onload({ status: 200, responseText: JSON.stringify({ choices: [{ message: { content: 'OK' } }] }) });
+    await probeOk;
+    assert.equal(requestContext.aiLastFailureAdvice('配置测试'), '', 'a 2xx probe must clear the stale advice');
+});
+
 test('option numbering maps model letters directly to ordered page descriptors', () => {
     const pageOptions = [
         { pageLetter: 'A', text: '城市民谣' },
@@ -378,6 +510,20 @@ test('single choice accepts explicit letters and unique exact text only', () => 
     assert.deepEqual(parse('C or D', { type: 0, options }), []);
     assert.deepEqual(parse('C\nActually D', { type: 0, options }), []);
     assert.deepEqual(parse('H', { type: 0, options }), []);
+});
+
+test('answer decorations are stripped only after the strict pass fails', () => {
+    const options = ['阿尔法', '贝塔', '伽马', '德尔塔'];
+    assert.deepEqual(parse('```\nC\n```', { type: 0, options }), ['C']);
+    assert.deepEqual(parse('**C**', { type: 0, options }), ['C']);
+    assert.deepEqual(parse('- C', { type: 0, options }), ['C']);
+    assert.deepEqual(parse('答案：C\n解析：伽马排在第三位', { type: 0, options }), ['C']);
+    assert.deepEqual(parse('正确\n解析：结论明确', { type: 3, options: [] }), ['正确']);
+    assert.deepEqual(parse('答案：A、C\n解析：两项都成立', { type: 1, options }), ['A', 'C']);
+    // 宽容模式不能被用来猜答案：先讲理由再给结论、或结论含糊时必须继续拒答。
+    assert.deepEqual(parse('A 选项不对\n所以答案是 C', { type: 0, options }), []);
+    assert.deepEqual(parse('【解析】因为因此', { type: 0, options }), []);
+    assert.deepEqual(parse('C or D', { type: 0, options }), []);
 });
 
 test('duplicate exact option text is ambiguous instead of choosing the first match', () => {
@@ -549,13 +695,18 @@ function createScheduler(missions = [], busy = 0, startTask, taskCandidateCount 
     const starts = [];
     let timerId = 0;
     const sandbox = vm.createContext({
-        console: { error() {} },
+        console: { error() {}, warn() {} },
         missionList: Object.fromEntries(missions.map(item => ['m' + item.jobid, item])),
         taskCandidateCount, taskSetupReady: true,
         busyThread: busy, stop: false, cVersion: 999, jumpType: 0,
         _w: { top: { unrivalScriptList: [] } },
         logs: { addLog: message => logs.push(message) },
         drainAiTrace: () => {},
+        _p: 'https:', _h: 'mooc1.chaoxing.com',
+        _d: { getElementById: () => null },
+        xxtFormatPlaybackTime: seconds => String(seconds) + 's',
+        xxtRiskControlUrl: (protocol, host) => String(protocol || 'https:') + '//' + String(host || '') +
+            '/antispiderShowVerify.ac',
         setTimeout: callback => { timers.set(++timerId, callback); return timerId; },
         clearTimeout: id => timers.delete(id)
     });
@@ -751,7 +902,8 @@ test('mission state keeps legacy fields synchronized and terminal states stable'
 const independent = vm.createContext({ console, Date, Math, JSON, Object, String, Number, isFinite, encodeURIComponent });
 vm.runInContext(extract('function xxtDecodeEntities(text)', 'function xxtFormatPlaybackTime(seconds)') +
     '\nglobalThis.api = { text: xxtTextFromMarkup, url: xxtAnanasUrl, ok: xxtAnanasSucceeded, live: xxtCreateLiveProgress,' +
-    ' run: xxtRegisterRun, conflict: xxtFindStudyConflict, sessions: xxtReadStudySessions };', independent);
+    ' run: xxtRegisterRun, conflict: xxtFindStudyConflict, sessions: xxtReadStudySessions,' +
+    ' risk: xxtRiskControlMark, riskUrl: xxtRiskControlUrl };', independent);
 const media = independent.api.text;
 const ananas = independent.api.url;
 const succeeded = independent.api.ok;
@@ -759,6 +911,8 @@ const liveProgress = independent.api.live;
 const registerRun = independent.api.run;
 const studyConflict = independent.api.conflict;
 const readSessions = independent.api.sessions;
+const riskMark = independent.api.risk;
+const riskUrl = independent.api.riskUrl;
 
 test('media extraction keeps readable URLs and drops scripts, styles, and unsafe sources', () => {
     const markup = '<style>.a{content:"<img src=x>"}</style>' +
@@ -1029,7 +1183,11 @@ test('an expired or platform-rejected chapter submit lock never blocks a retry',
     assert.ok(from !== -1 && to > from, 'the chapter submit coordination layer must be bounded');
     const context = vm.createContext({ console, Date, Map, URLSearchParams, Promise, setTimeout,
         aiTrace: () => {}, aiClip: (text, max) => String(text).slice(0, max) });
-    vm.runInContext(script.slice(from, to) + `
+    // 提交锁要能识别风控拦截文案，这个判定是仓库级共享的纯函数，一并带进沙箱。
+    const riskMarkFrom = script.indexOf('function xxtRiskControlMark(');
+    const riskMarkTo = script.indexOf('function xxtRiskControlUrl(', riskMarkFrom);
+    assert.ok(riskMarkFrom !== -1 && riskMarkTo > riskMarkFrom, 'the risk-control detection helper must exist');
+    vm.runInContext(script.slice(from, to) + '\n' + script.slice(riskMarkFrom, riskMarkTo) + `
 globalThis.api = { claim: aiClaimChapterSubmit, observe: aiObserveChapterAlert, failed: aiChapterSubmitFailed,
     pending: aiChapterPendingRequests, wait: aiWaitChapterPendingRequests };`, context);
     const api = context.api;
@@ -1099,6 +1257,65 @@ globalThis.api = { pending: aiChapterPendingRequests, wait: aiWaitChapterPending
     const timedOut = await api.wait(win, 'w1', 300, () => {});
     assert.equal(timedOut.timedOut, true, 'the wait must give up at the budget instead of hanging');
     assert.equal(timedOut.pending, 1);
+});
+
+// 共享注册表挂在顶层窗口上，切章时不会重建。只写不删的话，每切一章就永久留下
+// 一份已销毁 iframe 的 document（令牌的 root 与 signature 闭包都指向它）。
+// 回收必须保守：在途令牌影响提交等待、终态令牌影响跨页「已作答」去重，都不能误删，
+// 所以当前正在处理的章节整条跳过，只回收已经被切走的章节。
+test('chapter token registry reclaims dead chapters without dropping live coordination', () => {
+    const from = script.indexOf('function aiChapterSubmitHost(');
+    const to = script.indexOf('var GLOBAL = {', from);
+    assert.ok(from !== -1 && to > from, 'the chapter submit coordination layer must be bounded');
+    const context = vm.createContext({ console, Date, Map, URLSearchParams, Promise, setTimeout,
+        aiTrace: () => {}, aiClip: (text, max) => String(text).slice(0, max) });
+    vm.runInContext(script.slice(from, to) + `
+globalThis.api = { pending: aiChapterPendingRequests, pruneRegistry: aiPruneChapterRegistry,
+    pruneTokens: aiPruneChapterTokens, max: AI_CHAPTER_REGISTRY_MAX };`, context);
+    const api = context.api;
+    const now = Date.now();
+
+    // 一章的正常状态：一道还在跑、一道刚答完还挂在本页 DOM 上、一道答在已销毁的 iframe 里。
+    const requests = new Map();
+    requests.set('id:pending', { state: 'pending', startedAt: now });
+    requests.set('id:done-live', { state: 'done', startedAt: now, endedAt: now, root: { isConnected: true } });
+    requests.set('id:done-detached', { state: 'done', startedAt: now, endedAt: now, root: { isConnected: false } });
+    requests.set('id:stale-pending', { state: 'pending', startedAt: now - 300000 });
+    requests.set('id:done-expired', { state: 'done', startedAt: now - 3600000, endedAt: now - 3600000,
+        root: { isConnected: true } });
+    // 空壳的旧章节、还有在途请求的旧章节、以及当前正在处理的章节。
+    const registry = new Map([['work-empty', new Map()], ['work-busy',
+        new Map([['id:other', { state: 'pending', startedAt: now }]])], ['w1', requests]]);
+
+    api.pruneRegistry(registry, 'w2');
+    assert.deepEqual(Array.from(requests.keys()).sort(), ['id:done-live', 'id:pending'],
+        'detached and expired tokens must be reclaimed, live ones must stay');
+    assert.equal(api.pending({ __xxtChapterQuestionRequests: registry }, 'w1'), 1,
+        'the reclaimed stale pending token must stop holding back the chapter submit');
+    assert.equal(registry.has('work-empty'), false, 'an emptied chapter entry must not linger');
+    assert.equal(registry.has('work-busy'), true, 'a chapter with an in-flight request must be kept');
+
+    // 当前章节整条跳过：它还要参与「另一页面已完成」的跨页去重，那一步不检查 isLive()。
+    const current = new Map([['id:c', { state: 'done', startedAt: now, endedAt: now, root: { isConnected: false } }]]);
+    const registry2 = new Map([['w-current', current]]);
+    api.pruneRegistry(registry2, 'w-current');
+    assert.equal(current.size, 1, 'the chapter being processed must keep its coordination state');
+
+    // 硬上限：章节数再多也不能让注册表无限增长，且绝不清理当前章节。
+    const big = new Map();
+    for (let i = 0; i < api.max + 4; i++) {
+        big.set('w' + i, new Map([['id:' + i, { state: 'done', startedAt: now, endedAt: now, root: { isConnected: true } }]]));
+    }
+    big.set('current', new Map([['id:cur', { state: 'done', startedAt: now, endedAt: now, root: { isConnected: true } }]]));
+    api.pruneRegistry(big, 'current');
+    assert.ok(big.size <= api.max, 'the registry must stay under its hard cap');
+    assert.equal(big.has('current'), true, 'the chapter being processed must never be dropped');
+    assert.equal(big.has('w' + (api.max + 3)), true, 'the newest chapters are the ones worth keeping');
+
+    // 在途令牌一律不回收，哪怕节点已经不在了：AI 请求可能仍在写这一页的答案。
+    const live = new Map([['id:x', { state: 'pending', startedAt: now, root: { isConnected: false } }]]);
+    api.pruneTokens(live, now);
+    assert.equal(live.has('id:x'), true, 'an in-flight request must survive pruning');
 });
 
 // 行为级校验：模拟真实桌面章节页的三段链路（validate 异步 → toadd 写清单 → workPop 确认），
@@ -1584,10 +1801,24 @@ test('the legacy question-bank answer path is gone instead of shipping dead code
 
     // 「跳过已作答」的题目不调 AI，没必要再等风控间隔，否则整卷答完会白等 12s × 题量。
     assert.match(script, /var AI_SKIP_ANSWERED_DELAY_MS = \d+;/, 'the skip-answered fast path needs its own short delay');
-    assert.match(script, /await sleep\(noAiNeeded \? AI_SKIP_ANSWERED_DELAY_MS : questionIntervalSeconds\(\) \* 1e3\)/,
+    assert.match(script, /await sleep\(noAiNeeded \? AI_SKIP_ANSWERED_DELAY_MS : answerIntervalMs\(\)\)/,
         'the loop must use the short delay when the next question is already answered or the queue is empty');
     assert.match(script, /const noAiNeeded = !GLOBAL\.stop && \(pendingItem \? \(aiSkipAnswered\(\) && isDomQuestionAnswered\(pendingItem\)\) : lastIterationSkipped\);/,
         'skip detection must reuse the same answered check the skip branch uses');
+
+    // 固定到秒的节奏本身就是特征，逐题与保存都要在固定基数上叠随机浮动。
+    assert.match(script, /answerJitter:\s*\d+/, 'the per-question jitter must stay configurable');
+    assert.match(script, /saveJitter:\s*\d+/, 'the save/submit jitter must stay configurable');
+    assert.match(script, /function answerIntervalMs\(\) \{[\s\S]*?questionIntervalSeconds\(\) \* 1e3 \+ jitterMs\(/,
+        'the per-question wait must add jitter on top of the risk-control interval');
+    assert.match(script, /function saveDelayMs\(baseMs\) \{[\s\S]*?\+ jitterMs\(/,
+        'save/submit waits must add jitter on top of their fixed base');
+    // 浮动量必须是 [0, 上限) 区间：Math.random() 返回 0 时不加，回归测试才拿得到确定时长。
+    assert.match(script, /Math\.floor\(Math\.random\(\) \* range \* 1e3\)/,
+        'jitter must stay random-but-bounded so fixtures remain deterministic at Math.random() === 0');
+    // 逐题节奏不得绕过 answerIntervalMs 退回裸的固定间隔。
+    assert.ok(!/questionIntervalSeconds\(\) \* 1e3\)/.test(script.replace(/function answerIntervalMs[\s\S]*?\n}/, '')),
+        'per-question waits must go through answerIntervalMs() so they carry jitter');
 
     // 没有任何选择题选择器声明 answer 元素，所以 getAnswer 那条分支永远走不到。
     for (const [, body] of script.matchAll(/elements:\s*\{([\s\S]*?)\n\s*\},/g)) {
@@ -1598,4 +1829,149 @@ test('the legacy question-bank answer path is gone instead of shipping dead code
     for (const stale of ['相似答案', '查看相关答案', '搜索框', '暂停搜索', '继续搜索']) {
         assert.ok(!script.includes(stale), `stale question-bank wording must be gone: ${stale}`);
     }
+});
+
+// —— 超星风控（antispider）验证码 ——
+// 平台会把业务请求 302 到 /antispiderShowVerify.ac 并回一张要输入图片验证码的 HTML。
+// 这些回包必须被认出来，否则 JSON.parse 失败会被当成「接口错误」，任务进入 failed 终态，
+// 用户做完验证也接不回来，整章只能重来。
+test('antispider verify pages are recognised from the response body or the redirect target', () => {
+    // 真实验证页的标题与提示文案（issue Samueli924/chaoxing#510）。
+    const verifyPage = '<html><head><title>提示页面</title></head><body>' +
+        '<p>【9010】操作异常，请输入图片中的验证码</p>' +
+        '<img src="/processVerifyPng.ac?t=1699999999999"></body></html>';
+    assert.equal(riskMark(verifyPage), 'antispider');
+    assert.equal(riskMark('<p>请输入图片中的验证码</p>'), 'antispider');
+    assert.equal(riskMark('<p>【9010】操作异常</p>'), 'antispider');
+    // 302 后的地址由脚本管理器回传时可能出现在 finalUrl 里，同样要认。
+    assert.equal(riskMark('{}', 'https://mooc1.chaoxing.com/antispiderShowVerify.ac'), 'antispider');
+    assert.equal(riskMark('', '', 'location: /antispiderShowVerify.ac'), 'antispider');
+    assert.equal(riskMark('<img src="/processVerifyPng.ac?t=1">'), 'antispider', 'the captcha image must be enough');
+    assert.equal(riskMark('', 'https://mooc1.chaoxing.com/processVerifyPng.ac?t=1'), 'antispider',
+        'a verify endpoint in the redirect target must be enough even with an empty body');
+    assert.equal(riskMark('', 'https://mooc1.chaoxing.com/ananas/status/1'), '', 'a business endpoint must not match');
+
+    // 正常业务回包不能被误判，否则每次上报都会被当成风控。
+    assert.equal(riskMark('{"isPassed":true,"duration":600}'), '');
+    assert.equal(riskMark('success'), '');
+    assert.equal(riskMark(''), '');
+    assert.equal(riskMark(null, undefined), '');
+    assert.equal(riskMark('{"status":true}', 'https://mooc1.chaoxing.com/ananas/status/1'), '');
+});
+
+test('the verify link points at a page a human can actually solve', () => {
+    // 早期实现把上报接口当 href，用户点开只看得到一段 JSON。
+    const url = riskUrl('https:', 'mooc1.chaoxing.com');
+    assert.equal(url, 'https://mooc1.chaoxing.com/antispiderShowVerify.ac');
+    assert.ok(!/saveTimePc|ananas|processVerify/.test(url), 'the link must not point at a business endpoint');
+    assert.equal(riskUrl('', ''), 'https:///antispiderShowVerify.ac', 'missing inputs must not throw');
+});
+
+test('every antispider-aware request reports a pause instead of a terminal failure', () => {
+    // 回归防线：这几处 onload 一旦退回「解析失败 / 任务失败」，验证完就再也接不回来。
+    for (const [label, from, to] of [
+        ['video readiness', 'const videoReadyRequests = new Set();', 'doVideo ='],
+        ['document', 'doDocument = (item) => {', 'doWork ='],
+        ['ananas task', 'doAnanasTask = (item, spec, label) => {', 'doBook ='],
+        ['live', 'doLive = (item) => {', 'missionList = Object.create(null),']
+    ]) {
+        const start = script.indexOf(from);
+        const end = script.indexOf(to, start);
+        assert.ok(start >= 0 && end > start, label + ' block must be bounded');
+        const block = script.slice(start, end);
+        assert.match(block, /xxtRiskControlMark\(/, label + ' must detect an antispider response');
+        assert.match(block, /xxtRiskControlEnter\(/, label + ' must pause instead of failing the mission');
+    }
+
+    // 视频进度上报是最常撞风控的一步，也必须走同一套暂停逻辑。
+    const progressFrom = script.indexOf('let reportsUrl = reportUrl');
+    const progressTo = script.indexOf('onerror: function (err) {', progressFrom);
+    assert.ok(progressFrom >= 0 && progressTo > progressFrom, 'the video progress block must be bounded');
+    const progress = script.slice(progressFrom, progressTo);
+    assert.match(progress, /xxtRiskControlMark\(/, 'the video progress report must detect an antispider response');
+    assert.match(progress, /xxtRiskControlEnter\('video-progress'\)/,
+        'a blocked progress report must pause the mission, not stop the engine');
+    assert.ok(!/stop = true/.test(progress), 'an antispider response must never stop the whole engine');
+    assert.ok(!/_l\.reload\(\)/.test(progress), 'a captcha must not force an unexplained page reload');
+});
+
+test('a risk-control pause keeps missions alive and resumes them on demand', () => {
+    const timers = new Map();
+    let timerId = 0;
+    const logs = [];
+    const retried = [];
+    const sandbox = vm.createContext({
+        console, Date, Math, String, Number, _p: 'https:', _h: 'mooc1.chaoxing.com',
+        stop: false, loopJobEnded: false,
+        logs: { addLog: message => logs.push(message) },
+        _d: { getElementById: () => null }, _w: {},
+        xxtFormatPlaybackTime: seconds => String(seconds) + 's',
+        setTimeout: (callback, delay) => { timers.set(++timerId, { callback, delay }); return timerId; },
+        clearTimeout: id => timers.delete(id)
+    });
+    // 暂停/恢复是调度器的一部分，测试直接跑生产实现。
+    const from = script.indexOf('            loopJobTimer = null,');
+    const to = script.indexOf('            loopjob = () => {', from);
+    assert.ok(from >= 0 && to > from, 'the risk-control state machine must be bounded');
+    const helperFrom = script.indexOf('function xxtRiskControlMark(');
+    const helperTo = script.indexOf('function xxtFormatPlaybackTime(seconds)', helperFrom);
+    assert.ok(helperFrom >= 0 && helperTo > helperFrom, 'the verify-link helper must exist');
+    vm.runInContext(script.slice(helperFrom, helperTo) + '\nvar ' + script.slice(from, to).replace(/,\s*$/, ';') +
+        '\nglobalThis.api = { enter: xxtRiskControlEnter, leave: xxtRiskControlLeave, state: riskControl };', sandbox);
+    const api = sandbox.api;
+
+    assert.equal(api.state.active, false);
+    api.enter('video-progress', () => retried.push('video'));
+    assert.equal(api.state.active, true);
+    assert.equal(api.state.scene, 'video-progress');
+    assert.equal(api.state.url, 'https://mooc1.chaoxing.com/antispiderShowVerify.ac');
+    assert.equal(logs.length, 1);
+    assert.match(logs[0], /验证码/);
+    assert.match(logs[0], /暂停/);
+    // 暂停期间要有心跳，否则用户验证完之后脚本永远不会再动。
+    assert.equal(timers.size, 1);
+    assert.equal(Array.from(timers.values())[0].delay, 3000);
+
+    // 重复撞验证不应刷屏，但重试动作要都记住。
+    api.enter('document', () => retried.push('document'));
+    assert.equal(logs.length, 1, 'the pause must only be announced once');
+
+    api.leave();
+    assert.equal(api.state.active, false);
+    assert.deepEqual(retried, ['video', 'document'], 'every blocked mission must be retried after verification');
+    assert.equal(logs.length, 2);
+    assert.match(logs[1], /已恢复运行/);
+    assert.equal(timers.size, 1, 'resuming must reschedule the scheduler exactly once');
+});
+
+test('the panel exposes a verify entry and a resume button', () => {
+    const page = script.slice(script.indexOf('var PAGE_HTML'), script.indexOf('var SETTINGS_HTML'));
+    assert.match(page, /id="riskControlBar"/, 'the panel must carry a risk-control bar');
+    assert.match(page, /id="riskControlVerifyButton"/, 'the user needs a link to the verify page');
+    assert.match(page, /id="riskControlResumeButton"/, 'the user needs a way to resume the run');
+    assert.match(page, /target="_blank"/, 'the verify page must open in a new tab so the run page keeps its state');
+    assert.match(page, /rel="noopener"/, 'an outbound verification link must not gain a window handle');
+
+    // 按钮必须真的接上状态机，否则 UI 只是装饰。
+    assert.match(script, /riskControlResumeButton[\s\S]{0,160}xxtRiskControlLeave\(\)/,
+        'the resume button must clear the pause');
+    assert.match(script, /riskControlVerifyButton'\)[\s\S]{0,160}riskControl\.url/,
+        'the verify link must carry the real verify URL');
+});
+
+test('a blocked chapter submit is reported as a verification request and stays retryable', () => {
+    // 桌面提交：整页被 302 到验证页时 #verifyCodeWin 根本不会出现。
+    const blockerFrom = script.indexOf('function desktopChapterSubmitBlocker()');
+    const blockerTo = script.indexOf('let desktopChapterSubmitNote', blockerFrom);
+    assert.ok(blockerFrom >= 0 && blockerTo > blockerFrom, 'the submit blocker must be bounded');
+    const blocker = script.slice(blockerFrom, blockerTo);
+    assert.match(blocker, /xxtRiskControlMark\(/, 'the submit blocker must recognise an antispider redirect');
+    assert.match(blocker, /验证码/, 'the reported reason must mention the verification code');
+
+    // alert 通道里的【9010】也要被记成拦截原因。
+    const observerFrom = script.indexOf('const observed = function (message) {');
+    const observerTo = script.indexOf('target.alert = observed;', observerFrom);
+    assert.ok(observerFrom >= 0 && observerTo > observerFrom, 'the alert observer must be bounded');
+    assert.match(script.slice(observerFrom, observerTo), /xxtRiskControlMark\(text\)/,
+        'an antispider alert must be remembered as the block reason');
 });
