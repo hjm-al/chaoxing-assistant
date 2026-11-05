@@ -66,6 +66,13 @@
 // @thanks        脚本猫 367《OCS 网课助手》作者 言小溪enncy
 // @thanks        Greasy Fork 28497《网页限制解除(改)》作者 qxinGitHub
 // @thanks        脚本猫 616 / Greasy Fork 451356《【万能】全平台自动答题脚本》作者 万能（Greasy Fork: xmig666）
+// @tag           超星学习通
+// @tag           学习辅助
+// @tag           答题辅助
+// @tag           AI答题
+// @tag           自动播放
+// @tag           在线教育
+// @tag           AI辅助
 // ==/UserScript==
 // 如需新增安全网址(@connect)，请在上方元数据块内的 @connect 列表中补充，一行一个。
 

@@ -1368,6 +1368,20 @@ test('no referral antifeature is claimed while the script carries no referral li
     assert.ok(header.includes('@antifeature payment'), 'the payment antifeature must stay');
 });
 
+test('the discovery tags stay inside the study-helper wording and never promise Zhihuishu', () => {
+    // 脚本猫的「标签」下拉是禁用态，只解析脚本头部的 @tag，所以标签只能靠元数据提供。
+    // 用词必须停在「学习辅助 / 效率工具」的口径内，并且不能挂智慧树——那条分支 v2.38 已整体移除。
+    const header = script.slice(0, script.indexOf('==/UserScript=='));
+    const tags = Array.from(header.matchAll(/^\/\/\s*@tag\s+(\S+)\s*$/gm), (m) => m[1]);
+    assert.ok(tags.length >= 5, `expected at least 5 discovery tags, got ${tags.length}`);
+    for (const required of ['超星学习通', '学习辅助', '答题辅助']) {
+        assert.ok(tags.includes(required), `${required} is a high-frequency search term on ScriptCat and must stay`);
+    }
+    for (const banned of ['刷课工具', '自动挂课', '免费搜题', '知到智慧树']) {
+        assert.ok(!tags.includes(banned), `${banned} must not be used: it is either grey-area wording or a promise the script no longer keeps`);
+    }
+});
+
 test('the embedded Typr.js keeps its source and license notice', () => {
     // Greasyfork 要求内嵌库注明来源；MIT 要求保留版权与许可声明。两者都靠这段注释满足。
     const at = script.indexOf('var Typr = {};');
