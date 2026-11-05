@@ -1,0 +1,15 @@
+# 依赖与临时产物
+node_modules/
+*.log
+
+# 相似度检测输出（可随时重新生成）
+对比结果.json
+
+# 历史快照与截图
+*.bak
+*.bak-*
+*.png
+
+# 系统文件
+Thumbs.db
+.DS_Store

@@ -1,0 +1,513 @@
+
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <title>学习通小助手V1.2</title>
+        <meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" name="viewport">
+        <link href="https://z.chaoxing.com/yanshi/css/bootstrap.min.css" rel="stylesheet">
+        <style>
+:root {
+  color-scheme: light;
+  --xxt-ink: #243447;
+  --xxt-muted: #718096;
+  --xxt-line: #e6ebf1;
+  --xxt-surface: #ffffff;
+  --xxt-soft: #f5f8fb;
+  --xxt-accent: #3b82f6;
+}
+            html, body {
+                min-height: 100%;
+                background: #eef2f6;
+                color: var(--xxt-ink);
+            }
+            body {
+                font-family: "Microsoft YaHei", Arial, sans-serif;
+            }
+            .xxt-page {
+                max-width: 1180px;
+                margin: 0 auto;
+                padding: 14px 16px 32px;
+            }
+            .xxt-page > .col-md-6 {
+                float: none;
+                width: 100%;
+                margin: 0;
+                padding: 0;
+            }
+            /* 标题并进「任务配置」的标题行，不再单独占一张卡片，首屏多出一整块空间。 */
+            .xxt-page #normalQuery > .panel-heading {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }
+            .xxt-page .xxt-page-title {
+                margin: 0;
+                color: var(--xxt-ink)!important;
+                font-size: 15px;
+                font-weight: 700;
+                line-height: 1.2;
+            }
+            .xxt-page #normalQuery #onlineNum {
+                color: var(--xxt-muted);
+                font-size: 12px;
+            }
+            .xxt-page #normalQuery > .panel-heading .xxt-section-tip {
+                margin-left: auto;
+                color: #8b98a8;
+                font-size: 11px;
+                font-weight: 400;
+            }
+            .xxt-page .panel {
+                margin-bottom: 10px;
+                border: 1px solid var(--xxt-line);
+                border-radius: 9px;
+                background: var(--xxt-surface);
+                box-shadow: 0 1px 6px rgba(31,45,61,.045);
+                overflow: hidden;
+            }
+            .xxt-page .panel-heading {
+                padding: 10px 13px;
+                border-bottom: 1px solid var(--xxt-line);
+                background: var(--xxt-soft);
+                color: #526273;
+                font-size: 13px;
+                font-weight: 700;
+            }
+            .xxt-page .panel-body {
+                padding: 12px 13px;
+            }
+            .xxt-page #normalQuery .panel-body {
+                line-height: 1.5;
+            }
+            /* 三组配置并排：宽屏一行三列（视频倍速 / 章节测试 / LLM 配置），
+               窗口变窄时自动折行，不再是三层纵向排布。 */
+            .xxt-page #normalQuery .xxt-config-grid {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: 0 18px;
+            }
+            .xxt-page #normalQuery .xxt-config-row {
+                display: flex;
+                align-items: center;
+                flex-wrap: wrap;
+                gap: 4px;
+                min-height: 32px;
+                margin: 0;
+            }
+            /* 并排后按钮和分隔符都要收紧，1366px 宽才能把三组挤进同一行。 */
+            .xxt-page #normalQuery .xxt-config-grid .xxt-config-controls a.btn {
+                padding: 4px 7px;
+            }
+            .xxt-page #normalQuery .xxt-config-grid .xxt-config-separator {
+                margin: 0;
+            }
+            .xxt-page #normalQuery .xxt-config-label {
+                flex: 0 0 auto;
+                margin-right: 3px;
+                color: #526273;
+                font-size: 12px!important;
+                font-weight: 600;
+            }
+            .xxt-page #normalQuery .xxt-config-row > .xxt-config-controls {
+                display: contents;
+            }
+            .xxt-page #normalQuery .panel-body a.btn,
+            .xxt-page #normalQuery .panel-body input {
+                margin: 0;
+            }
+            .xxt-page #normalQuery .panel-body input {
+                height: 30px;
+                padding: 5px 8px;
+            }
+            .xxt-page #normalQuery .panel-body a.btn {
+                padding: 5px 10px;
+            }
+            .xxt-page #normalQuery .xxt-config-separator {
+                color: #a7b3c0;
+                margin: 0 2px;
+            }
+            .xxt-page #normalQuery .xxt-config-note {
+                color: #718096;
+                font-size: 12px;
+            }
+            .xxt-page #normalQuery .xxt-config-help {
+                margin: 2px 0 0;
+                color: #718096!important;
+                font-size: 11px!important;
+            }
+            .xxt-page .btn {
+                border-radius: 5px;
+                border-color: #d7e1eb;
+                box-shadow: none;
+                font-size: 12px;
+            }
+            .xxt-page .btn-success,
+            .xxt-page .btn-primary {
+                border-color: var(--xxt-accent);
+                background: var(--xxt-accent);
+            }
+            .xxt-page #result {
+                flex: 1 1 auto;
+                min-height: 0;
+                display: flex;
+                flex-direction: column;
+                border-color: var(--xxt-line)!important;
+                border-radius: 6px!important;
+                background: #f8fafc!important;
+                color: #526273;
+            }
+            .xxt-page #unrivalRate {
+                border: 1px solid #d7e1eb;
+                border-radius: 5px;
+                padding: 6px 8px;
+                color: var(--xxt-ink);
+            }
+            .xxt-page #courseContent,
+            .xxt-page #videoTimeContent,
+            .xxt-page #frame_content {
+                display: block;
+                border: 1px solid var(--xxt-line)!important;
+                border-radius: 6px;
+                background: #f8fafc;
+            }
+            .xxt-page #courseContent {
+                width: 100%;
+                height: min(52vh, 620px);
+                min-height: 400px;
+            }
+            .xxt-page #frame_content {
+                height: min(52vh, 620px);
+                min-height: 400px;
+            }
+            /* 电脑端一屏可见：左边课程内容（视频/阅读/章节测试共用一张卡片），
+               右边运行日志，LLM 配置在下方独立成块，不再藏在标签页里。
+               两列卡片等高：网格拉伸 + 卡片内部纵向弹性，日志区自动填满剩余高度。 */
+            .xxt-page .xxt-grid {
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) 380px;
+                gap: 10px;
+                align-items: stretch;
+            }
+            .xxt-page .xxt-grid > .xxt-col {
+                min-width: 0;
+                display: grid;
+                grid-auto-rows: 1fr;
+                gap: 10px;
+            }
+            .xxt-page .xxt-grid .xxt-section {
+                display: flex;
+                flex-direction: column;
+                min-height: 0;
+                margin-bottom: 0;
+            }
+            .xxt-page .xxt-grid .xxt-section > .panel-body {
+                flex: 1 1 auto;
+                min-height: 0;
+                display: flex;
+                flex-direction: column;
+            }
+            .xxt-page .xxt-grid .xxt-stage {
+                flex: 1 1 auto;
+                min-height: 0;
+            }
+            .xxt-page .xxt-section {
+                margin-bottom: 10px;
+            }
+            .xxt-page .xxt-section > .panel-heading {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 10px;
+            }
+            .xxt-page .xxt-section > .panel-heading .xxt-section-tip {
+                color: #8b98a8;
+                font-size: 11px;
+                font-weight: 400;
+            }
+            /* 课程卡片内同一时刻只显示一个舞台：课程内容（视频/阅读）或章节测试答题页。 */
+            .xxt-page .xxt-stage-view {
+                display: none;
+            }
+            .xxt-page #courseSection[data-mode="course"] #courseView,
+            .xxt-page #courseSection[data-mode="work"] #workView {
+                display: block;
+            }
+            .xxt-page #courseSection .xxt-tip-work {
+                display: none;
+            }
+            .xxt-page #courseSection[data-mode="work"] .xxt-tip-course {
+                display: none;
+            }
+            .xxt-page #courseSection[data-mode="work"] .xxt-tip-work {
+                display: inline;
+            }
+            .xxt-page #courseSection[data-mode="work"] > .panel-heading > span:first-child::after {
+                content: " · 作答中";
+                color: var(--xxt-accent);
+                font-size: 11px;
+            }
+            .xxt-page #log {
+                flex: 1 1 auto;
+                min-height: 120px;
+                height: min(46vh, 420px);
+                overflow: auto;
+                padding-right: 4px;
+                line-height: 1.8!important;
+                font-size: 12px;
+                overflow-wrap: anywhere;
+            }
+            .xxt-page #aiStatus {
+                margin: 0;
+                font-size: 12px;
+                color: #718096;
+                overflow-wrap: anywhere;
+            }
+            .xxt-page .xxt-llm-panel {
+                width: 100%;
+                min-width: 0;
+                padding-top: 8px;
+                border-top: 1px solid var(--xxt-line);
+            }
+            .xxt-page #llmSettingsContainer {
+                width: 100%;
+                min-width: 0;
+            }
+            .xxt-page #llmSettingsContainer iframe {
+                display: block;
+                width: 100%;
+                height: 640px;
+                min-height: 420px;
+                border: 0;
+                background: #f3f6f9;
+            }
+            .xxt-page .xxt-llm-placeholder {
+                margin: 0;
+                padding: 6px 2px;
+                color: #718096;
+                font-size: 12px;
+            }
+            .xxt-page #normalQuery .panel-body {
+                display: grid;
+                gap: 8px;
+            }
+            @media (max-width: 900px) {
+                .xxt-page .xxt-grid {
+                    grid-template-columns: minmax(0, 1fr);
+                }
+                /* 单列时不需要再拉平两行高度，否则课程卡片会被撑到和日志一样高。 */
+                .xxt-page .xxt-grid > .xxt-col {
+                    grid-auto-rows: auto;
+                }
+                .xxt-page .xxt-grid .xxt-section {
+                    display: block;
+                }
+                .xxt-page .xxt-grid .xxt-section > .panel-body {
+                    display: block;
+                }
+                .xxt-page .xxt-grid .xxt-stage {
+                    min-height: 0;
+                }
+                .xxt-page #result,
+                .xxt-page #log {
+                    display: block;
+                    flex: none;
+                }
+                .xxt-page #log {
+                    height: 260px;
+                }
+            }
+            @media (max-width: 600px) {
+                .xxt-page { padding: 8px 6px 18px; }
+                .xxt-page #llmSettingsContainer iframe { height: 1100px; }
+                .xxt-page #courseContent,
+                .xxt-page #frame_content { height: 420px; min-height: 320px; }
+                .xxt-page .xxt-page-title { font-size: 14px; }
+                .xxt-page #normalQuery .xxt-config-row { min-height: 0; }
+                /* 窄屏换行后行尾会留下孤零零的竖线分隔符，看着像渲染错位。 */
+                .xxt-page #normalQuery .xxt-config-separator { display: none; }
+                .xxt-page #normalQuery .xxt-config-note { display: block; width: 100%; }
+            }
+        </style>
+    </head>
+    <body>
+        <div class="xxt-page row" style="margin: 0 auto;">
+            <div class="col-md-6 col-md-offset-3">
+                <div class="panel panel-default" id="normalQuery">
+                    <div class="panel-heading">
+                        <h3 class="xxt-page-title">学习通助手</h3>
+                        <div id="onlineNum"></div>
+                        <span class="xxt-section-tip">任务配置</span>
+                    </div>
+                    <div class="panel-body">
+                        <div class="xxt-config-grid">
+                            <div class="xxt-config-row">
+                            <div class="xxt-config-label">视频倍速：</div>
+                            <div class="xxt-config-controls">
+                                <input type="number" id="unrivalRate" style="width: 80px;">
+                                &ensp;
+                                <a id='updateRateButton' class="btn btn-default">保存</a>
+                                <span class="xxt-config-separator">|</span>
+                                <a id='reviewModeButton' class="btn btn-default">复习模式</a>
+                                <span class="xxt-config-separator">|</span>
+                                <a id='videoTimeButton' class="btn btn-default">查看学习进度</a>
+                                <span class="xxt-config-separator">|</span>
+                                <a id='previewPlayButton' class="btn btn-default">预览同步播放</a>
+                            </div>
+                            </div>
+                            <div class="xxt-config-row">
+                            <div class="xxt-config-label">章节测试：</div>
+                            <div class="xxt-config-controls">
+                            <a id='autoDoWorkButton' class="btn btn-default">自动答题</a>
+                            <span class="xxt-config-separator">|</span>
+                            <a id='autoSubmitButton' class="btn btn-default">自动提交</a>
+                            <span class="xxt-config-separator">|</span>
+                            <a id='autoSaveButton' class="btn btn-default">自动保存</a>
+                            <span class="xxt-config-separator">|</span>
+                            <a id='recognitionCheckButton' class="btn btn-default">识别诊断</a>
+                            </div>
+                            </div>
+                            <div class="xxt-config-row">
+                            <div class="xxt-config-label">LLM 配置：</div>
+                            <div class="xxt-config-controls">
+                            <a id='llmToggleButton' class="btn btn-default" role="button" aria-expanded="false"
+                                aria-controls="llmPanel">展开设置</a>
+                            <span class="xxt-config-separator xxt-config-separator-llm">|</span>
+                            <span class="xxt-config-note" id='aiStatus'>当前：AI已关闭</span>
+                            </div>
+                            </div>
+                        </div>
+                        <p class="xxt-config-help">自用即可，视频倍速尽量1倍速（速度过快容易清进度）</p>
+                        <div class="xxt-llm-panel" id="llmPanel" style="display: none;">
+                            <div id="llmSettingsContainer"><p class="xxt-llm-placeholder">正在加载 LLM 配置…</p></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="xxt-grid">
+                    <div class="xxt-col">
+                        <div class="panel panel-default xxt-section" data-pane="course" id="courseSection"
+                            data-mode="course">
+                            <div class="panel-heading">
+                                <span>课程内容 / 章节测试</span>
+                                <span class="xxt-section-tip" id="courseStateTip">
+                                    <span class="xxt-tip-course">视频与阅读任务在本区域自动播放</span>
+                                    <span class="xxt-tip-work" id="workStateTip">暂无进行中的章节测试</span>
+                                </span>
+                            </div>
+                            <div class="panel-body">
+                                <div class="xxt-stage">
+                                    <div class="xxt-stage-view" id="courseView">
+                                        <iframe id="courseContent" src="" frameborder="0" scrolling="auto"
+                                            title="课程视频和题目内容"></iframe>
+                                        <div id='videoTime' style="display: none;height: 300px;margin-top: 10px;">
+                                            <div class="panel panel-default" style="margin: 0;">
+                                                <div class="panel-heading">学习进度</div>
+                                                <div class="panel-body" style="height: 260px;">
+                                                    <iframe id="videoTimeContent" src="" frameborder="0" scrolling="auto"
+                                                        style="width: 100%;height: 100%;"></iframe>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="xxt-stage-view" id="workView">
+                                        <div id="workEmpty" style="color: #888; font-size: 12px; padding: 6px 0;">当前不是章节测试，进入答题时会自动切换到本区域</div>
+                                        <div id="workPanel" style="display: none;">
+                                            <iframe id="frame_content" name="frame_content" src="" frameborder="0" scrolling="auto"
+                                                style="width: 100%;"></iframe>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="xxt-col">
+                        <div class="panel panel-default xxt-section" data-pane="log">
+                            <div class="panel-heading">
+                                <span>运行日志</span>
+                                <span class="xxt-section-tip">最近 240 条，自动滚动</span>
+                            </div>
+                            <div class="panel-body">
+                                <div id="result">
+                                    <div id="log">
+                                        <span data-xxt-log-placeholder style="color: red">[00:00:00]如果此提示不消失，说明页面出现了错误，请联系作者</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <script>
+        (function () {
+            const settingsHtml = "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\">\n<style>\n*{box-sizing:border-box}\nbody{margin:0;padding:14px;font:12px/1.55 \"Microsoft YaHei\",Arial,sans-serif;color:#263445;background:#f3f6f9;height:100%;overflow-y:auto}\nh3{margin:0 0 12px;padding:12px 14px;border:1px solid #e4eaf0;border-radius:8px;background:#fff;color:#263445;font-size:15px;box-shadow:0 2px 8px rgba(31,45,61,.05)}\n.settings-shell{display:grid;gap:9px}\n.settings-card{padding:11px 12px;border:1px solid #e4eaf0;border-radius:8px;background:#fff;box-shadow:0 1px 5px rgba(31,45,61,.04)}\n.sec{margin:0 0 9px;color:#526273;font-size:12px;font-weight:700;letter-spacing:.02em}\n.row{margin-bottom:8px;display:flex;align-items:flex-start}\n.row:last-child{margin-bottom:0}\n.row>label{width:88px;flex:none;color:#617184;padding-top:5px;font-size:12px}\n.row .ctl{flex:1;min-width:0;display:flex;flex-wrap:wrap;align-items:center;gap:6px}\n.row input,.row select,.row textarea{flex:1;min-width:0;padding:6px 8px;border:1px solid #dbe3eb;border-radius:5px;font-size:12px;font-family:inherit;background:#fff;color:#263445;outline:none;transition:border-color .15s,box-shadow .15s}\n.row input:focus,.row select:focus,.row textarea:focus{border-color:#409eff;box-shadow:0 0 0 2px rgba(64,158,255,.12)}\n.row textarea{resize:vertical;min-height:54px}\n.hint{color:#5b8def;font-size:11px;cursor:pointer;flex:0 1 auto;min-width:0;overflow-wrap:anywhere;padding-top:5px}\n.hint:hover{color:#2f6fd1}\n.btns{display:flex;gap:7px;padding:8px 0;position:sticky;bottom:0;background:linear-gradient(180deg,rgba(243,246,249,0),#f3f6f9 22%);}\nbutton{padding:6px 12px;border:1px solid #dbe3eb;background:#fff;border-radius:5px;color:#526273;cursor:pointer;font-size:12px;transition:border-color .15s,background .15s}\nbutton.primary{background:#3b82f6;border-color:#3b82f6;color:#fff}\nbutton:hover{border-color:#93b9f5;background:#f7fbff}button.primary:hover{background:#286fd9}\n#status{margin-top:8px;padding:8px 10px;border:1px solid #e4eaf0;border-radius:6px;font-size:12px;background:#fff;color:#617184;white-space:pre-wrap;word-break:break-all;min-height:34px}\n#status.ok{border-color:#ccebd6;background:#f3fbf5;color:#317a4a}\n#status.err{border-color:#f5d2d2;background:#fff6f6;color:#c44545}\n@media(max-width:560px){.row>label{width:72px}.row .ctl input[type=\"number\"]{flex:1 1 100px}.row .ctl #model{flex:1 1 100%}.row .ctl #fetchModels{margin-left:auto}}\n</style></head><body>\n<h3>LLM 设置（第三方模型辅助）</h3>\n<div class=\"settings-shell\">\n<div class=\"settings-card\">\n<div class=\"sec\">连接与模型</div>\n<div class=\"row\"><label>AI 答题</label><div class=\"ctl\"><select id=\"mode\"><option value=\"off\">关闭（只做视频/文档任务）</option><option value=\"first\">开启 AI 直连答题</option></select></div></div>\n<div class=\"row\"><label>预设</label><div class=\"ctl\"><select id=\"preset\"></select></div></div>\n<div class=\"row\"><label>接口地址</label><div class=\"ctl\"><input id=\"url\" placeholder=\"https://api.deepseek.com\"></div></div>\n<div class=\"row\"><label>API Key</label><div class=\"ctl\"><input id=\"key\" type=\"password\" placeholder=\"sk-...\"><span class=\"hint\" id=\"showKey\">显示</span></div></div>\n<div class=\"row\"><label>获取密钥</label><div class=\"ctl\"><a href=\"https://nuoapi.net/register\" target=\"_blank\" rel=\"noopener\" style=\"color:#3b82f6;font-size:12px;line-height:1.6;\">获取 NuoAPI 密钥</a></div></div>\n<div class=\"row\"><label>模型</label><div class=\"ctl\"><select id=\"model\"><option value=\"\">请先获取模型列表</option></select><button id=\"fetchModels\" type=\"button\">获取模型列表</button></div></div>\n<div class=\"row\"><label>跳过已作答</label><div class=\"ctl\"><label style=\"font-size:12px;color:#526273;\"><input type=\"checkbox\" id=\"skip_answered\" style=\"width:auto;margin-right:6px;vertical-align:middle;\">已作答题目不覆盖</label></div></div>\n<div class=\"row\"><label>超时 / 温度</label><div class=\"ctl\"><input id=\"timeout\" type=\"number\" min=\"3000\" step=\"1000\" placeholder=\"超时 22000ms\"><input id=\"temperature\" type=\"number\" min=\"0\" max=\"2\" step=\"0.1\" placeholder=\"温度 0.2\"><input id=\"max_tokens\" type=\"number\" min=\"1\" step=\"64\" placeholder=\"max_tokens 1024\"></div></div>\n<div class=\"row\"><label>失败重试</label><div class=\"ctl\"><input id=\"retries\" type=\"number\" min=\"0\" max=\"5\" step=\"1\" placeholder=\"重试次数 2\"><span class=\"hint\" style=\"cursor:default;color:#8a97a6;\">遇到 429/5xx/超时自动重试，0 表示不重试</span></div></div>\n<div class=\"row\"><label>单题上限</label><div class=\"ctl\"><span class=\"hint\" style=\"cursor:default;color:#8a97a6;\">默认：连接超时 5s、单次响应超时 22s、失败重试 2 次（间隔 0.8～1.5s）、单题总等待 45s，超时即跳过。并发固定建议 2，接口不稳时不要调高。</span><button id=\"resetLimits\" type=\"button\">恢复默认</button></div></div>\n<div class=\"row\"><label>并发上限</label><div class=\"ctl\"><input id=\"concurrency\" type=\"number\" min=\"1\" max=\"6\" step=\"1\" placeholder=\"并发 2\"><span class=\"hint\" style=\"cursor:default;color:#8a97a6;\">同时进行的 AI 请求数，1 最稳，调高更容易触发上游 502/429</span></div></div>\n</div>\n<div class=\"settings-card\">\n<div class=\"sec\">提示词</div>\n<div class=\"row\"><label>系统提示词</label><div class=\"ctl\"><textarea id=\"system_prompt\" rows=\"3\" placeholder=\"留空使用默认\"></textarea></div></div>\n<div class=\"row\"><label>用户提示词</label><div class=\"ctl\"><textarea id=\"user_prompt\" rows=\"4\" placeholder=\"留空使用默认模板\"></textarea></div></div>\n<div class=\"row\"><label>缓存优化</label><div class=\"ctl\" style=\"font-size:12px;color:#718096;line-height:1.6;\">固定说明文字会自动前置，题目等变动内容自动后置。</div></div>\n</div>\n<div class=\"settings-card\">\n<div class=\"sec\">高级配置</div>\n<div class=\"row\"><label>额外请求头</label><div class=\"ctl\"><textarea id=\"headers_json\" rows=\"2\" placeholder=\"例如 {&quot;x-api-version&quot;:&quot;2024-01-01&quot;}\"></textarea></div></div>\n<div class=\"row\"><label>额外请求体</label><div class=\"ctl\"><textarea id=\"body_json\" rows=\"2\" placeholder=\"例如 {&quot;top_p&quot;:0.9}\"></textarea></div></div>\n<div class=\"row\"><label>响应字段路径</label><div class=\"ctl\"><input id=\"response_path\" placeholder=\"choices.0.message.content\"></div></div>\n</div>\n<div class=\"settings-card\">\n<div class=\"sec\">配置备份</div>\n<div class=\"row\"><label>导出 / 导入</label><div class=\"ctl\"><button id=\"exportCfg\" type=\"button\">导出配置</button><button id=\"importCfg\" type=\"button\">导入配置</button><span class=\"hint\" style=\"cursor:default;color:#8a97a6;\">用于换浏览器、换设备或跨版本迁移</span></div></div>\n<div class=\"row\"><label>配置文本</label><div class=\"ctl\"><textarea id=\"cfgText\" rows=\"3\" placeholder=\"点“导出配置”把当前设置写到这里；粘贴别人的配置后点“导入配置”\"></textarea></div></div>\n</div>\n</div>\n<div class=\"btns\"><button class=\"primary\" id=\"save\">保存</button><button id=\"test\">测试连接</button><button id=\"resetStats\">重置统计</button><button id=\"close\">返回运行日志</button></div>\n<div id=\"status\">修改后点“保存”立即生效，无需刷新页面。</div>\n<div id=\"stats\" style=\"margin-top:8px;padding:0 2px;font-size:12px;color:#718096;line-height:1.6;white-space:pre-wrap;\">AI 调用统计加载中…</div>\n<script>\nvar AI_NONCE=\"__AI_NONCE__\";\nvar PRESETS=[{n:\"自定义\",u:\"\",m:\"\"},{n:\"DeepSeek\",u:\"https://api.deepseek.com\",m:\"deepseek-flash\"},{n:\"Ollama本地\",u:\"http://localhost:11434/v1\",m:\"qwen2.5:7b\"},{n:\"NuoAPI\",u:\"https://nuoapi.net/v1\",m:\"gpt-5.6-luna\"}];\nvar MODELS=[\"deepseek-flash\",\"deepseek-v4-pro\",\"qwen2.5:7b\",\"gpt-5.6-luna\"];\nfunction $(id){return document.getElementById(id);}\nfunction aiShowStatus(msg,type){var s=$(\"status\");if(!s)return;s.textContent=msg;s.className=type||\"\";}\nfunction aiShowStats(s){var el=$(\"stats\");if(el)el.textContent=s||\"AI 调用统计加载中…\";}\nfunction aiSetModelOptions(models,selected){var s=$(\"model\");if(!s)return;var list=[];for(var i=0;i<(models||[]).length;i++){var m=String(models[i]||\"\").trim();if(m&&list.indexOf(m)<0)list.push(m);}if(selected&&list.indexOf(selected)<0)list.unshift(selected);s.innerHTML=\"\";if(!list.length){var empty=document.createElement(\"option\");empty.value=\"\";empty.textContent=\"请先获取模型列表\";s.appendChild(empty);return;}for(var j=0;j<list.length;j++){var o=document.createElement(\"option\");o.value=list[j];o.textContent=list[j];s.appendChild(o);}s.value=selected&&list.indexOf(selected)>=0?selected:list[0];}\nfunction aiSetValues(v){v=v||{};$(\"mode\").value=v.mode===\"off\"?\"off\":\"first\";$(\"url\").value=v.url||\"\";$(\"key\").value=v.key||\"\";aiSetModelOptions(MODELS,v.model||\"\");$(\"timeout\").value=v.timeout||22000;$(\"retries\").value=v.retries==null?2:v.retries;$(\"concurrency\").value=v.concurrency==null?2:v.concurrency;$(\"temperature\").value=v.temperature==null?\"0.2\":v.temperature;$(\"max_tokens\").value=v.max_tokens||1024;$(\"system_prompt\").value=v.system_prompt||\"\";$(\"user_prompt\").value=v.user_prompt||\"\";$(\"headers_json\").value=v.headers_json||\"\";$(\"body_json\").value=v.body_json||\"\";$(\"response_path\").value=v.response_path||\"\";$(\"skip_answered\").checked=!!v.skip_answered;aiShowStatus(\"当前：\"+(v.mode===\"off\"?\"已关闭AI\":\"AI直连\"),\"\");}\nfunction aiReadValues(){return{mode:$(\"mode\").value,url:$(\"url\").value.trim(),key:$(\"key\").value.trim(),model:$(\"model\").value.trim(),timeout:$(\"timeout\").value,retries:$(\"retries\").value,concurrency:$(\"concurrency\").value,temperature:$(\"temperature\").value,max_tokens:$(\"max_tokens\").value,system_prompt:$(\"system_prompt\").value,user_prompt:$(\"user_prompt\").value,headers_json:$(\"headers_json\").value,body_json:$(\"body_json\").value,response_path:$(\"response_path\").value,skip_answered:$(\"skip_answered\").checked?1:0};}\nfunction aiReply(r){r=r||{};if(r.models){aiSetModelOptions(r.models,$(\"model\").value);}$(\"fetchModels\").disabled=!!r.pending;if(r.pending){aiShowStatus(r.msg||\"处理中…\",\"\");return;}if(r.exported!=null){var ta=$(\"cfgText\");if(ta)ta.value=String(r.exported||\"\");if(r.ok){if(r.values){aiSetValues(r.values);}aiShowStatus(r.msg||\"成功\",\"ok\");}else{aiShowStatus(r.msg||\"失败\",\"err\");}return;}if(r.ok){if(r.values){aiSetValues(r.values);}aiShowStatus(r.msg||\"成功\",\"ok\");}else{aiShowStatus(r.msg||\"失败\",\"err\");}}\nfunction aiPost(data){data.__xxtAiSetting=true;data.nonce=AI_NONCE;window.parent.postMessage(data,\"*\");}\nvar ps=$(\"preset\");for(var i=0;i<PRESETS.length;i++){var op=document.createElement(\"option\");op.textContent=PRESETS[i].n;op.value=i;ps.appendChild(op);}\nps.onchange=function(){var p=PRESETS[this.value];if(p&&p.u){$(\"url\").value=p.u;$(\"model\").value=p.m;aiShowStatus(\"已填入预设：\"+p.n+\"，请确认后再点测试/保存。\",\"\");}};\naiSetModelOptions(MODELS,\"\");\n$(\"save\").onclick=function(){aiShowStatus(\"保存中…\",\"\");aiPost({type:\"save\",data:aiReadValues()});};\n$(\"test\").onclick=function(){aiShowStatus(\"正在请求模型，请稍候…\",\"\");aiPost({type:\"test\",data:aiReadValues()});};\n$(\"fetchModels\").onclick=function(){aiShowStatus(\"正在获取模型列表，请稍候…\",\"\");aiPost({type:\"models\",data:aiReadValues()});};\n$(\"close\").onclick=function(){aiPost({type:\"close\"});};\n$(\"showKey\").onclick=function(){var k=$(\"key\");k.type=k.type===\"password\"?\"text\":\"password\";this.textContent=k.type===\"password\"?\"显示\":\"隐藏\";};\n$(\"resetStats\").onclick=function(){aiPost({type:\"reset_stats\"});};\n$(\"resetLimits\").onclick=function(){$(\"timeout\").value=22000;$(\"retries\").value=2;$(\"concurrency\").value=2;aiShowStatus(\"已填入推荐默认值（超时 22000ms / 重试 2 次 / 并发 2），点“保存”生效。\",\"\");};\n$(\"exportCfg\").onclick=function(){aiShowStatus(\"正在读取当前配置…\",\"\");aiPost({type:\"export_cfg\"});};\n$(\"importCfg\").onclick=function(){var t=$(\"cfgText\").value;if(!t.replace(/s+/g,\"\")){aiShowStatus(\"配置文本为空：请先粘贴导出内容\",\"err\");return;}aiShowStatus(\"正在导入…\",\"\");aiPost({type:\"import_cfg\",text:t});};\n<\/script>\n</body></html>";
+
+            function mountSettings() {
+                const container = document.getElementById('llmSettingsContainer');
+                if (container && !container.querySelector('iframe')) {
+                    const frame = document.createElement('iframe');
+                    frame.title = 'LLM 配置';
+                    frame.style.cssText = 'display:block;width:100%;min-height:520px;border:0;background:#f3f6f9';
+                    frame.srcdoc = settingsHtml.replace('__AI_NONCE__', 'debug-preview');
+                    container.textContent = '';
+                    container.appendChild(frame);
+                }
+            }
+            mountSettings();
+
+            document.getElementById('log').innerHTML =
+                '<span style="color: green">[调试] 页面模板加载成功</span><br>' +
+                '<span style="color: #526273">[调试] 当前为独立预览，不会访问超星接口</span>';
+
+            document.getElementById('courseContent').srcdoc =
+                '<!doctype html><html><body style="font-family:Microsoft YaHei;padding:24px;color:#263445">' +
+                '<h3>课程内容预览区域</h3><p>这里可以替换成需要调试的卡片 HTML。</p>' +
+                '<div style="padding:16px;border:1px solid #d7e1eb;border-radius:6px;background:#f8fafc">' +
+                '示例课程卡片</div></body></html>';
+
+            document.getElementById('frame_content').srcdoc =
+                '<!doctype html><html><body style="font-family:Microsoft YaHei;padding:24px">' +
+                '章节测试预览区域</body></html>';
+
+            // 课程卡片默认展示课程内容；调试页通过 window.xxtDebugSetCourseMode 切换两种模式。
+            const courseSection = document.getElementById('courseSection');
+            const workStateTip = document.getElementById('workStateTip');
+            window.xxtDebugSetCourseMode = function (mode) {
+                if (!courseSection) return;
+                const isWork = mode === 'work';
+                courseSection.setAttribute('data-mode', isWork ? 'work' : 'course');
+                document.getElementById('workPanel').style.display = isWork ? 'block' : 'none';
+                document.getElementById('workEmpty').style.display = isWork ? 'none' : 'block';
+                if (workStateTip) workStateTip.textContent = isWork ? '正在作答：调试章节测试' : '暂无进行中的章节测试';
+            };
+            window.xxtDebugSetCourseMode('course');
+
+            // LLM 表单并进顶部任务配置，默认收起；调试页提供同样语义的开关。
+            const llmPanel = document.getElementById('llmPanel');
+            const llmToggle = document.getElementById('llmToggleButton');
+            window.xxtDebugSetLlmPanel = function (open) {
+                if (!llmPanel) return;
+                llmPanel.style.display = open ? 'block' : 'none';
+                if (llmToggle) {
+                    llmToggle.textContent = open ? '收起设置' : '展开设置';
+                    llmToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+                }
+            };
+            if (llmToggle) {
+                llmToggle.addEventListener('click', function () {
+                    window.xxtDebugSetLlmPanel(llmPanel && llmPanel.style.display === 'none');
+                });
+            }
+            window.xxtDebugSetLlmPanel(false);
+
+            document.getElementById('previewPlayButton').addEventListener('click', function () {
+                this.classList.toggle('btn-success');
+                this.classList.toggle('btn-default');
+            });
+        }());
+    </script>
+</body>
+
+</html>
